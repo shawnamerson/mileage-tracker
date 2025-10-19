@@ -54,8 +54,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@/contexts/AuthContext';
 import { getTrialDaysRemaining } from '@/services/authService';
-// TEMPORARILY DISABLED FOR DEBUGGING
-// import { restorePurchases } from '@/services/subscriptionService';
+import { restorePurchases } from '@/services/subscriptionService';
 import { router } from 'expo-router';
 
 export default function SettingsScreen() {
@@ -444,14 +443,7 @@ export default function SettingsScreen() {
 
           <TouchableOpacity
             style={[styles.restorePurchasesButton, { borderColor: colors.primary }]}
-            onPress={() => {
-              // TEMPORARILY DISABLED FOR DEBUGGING
-              Alert.alert(
-                'Temporarily Unavailable',
-                'Subscription management is temporarily disabled. Your trial access is still active.'
-              );
-
-              /* TODO: Re-enable once IAP is fixed
+            onPress={async () => {
               setLoading(true);
               try {
                 const { success, error } = await restorePurchases();
@@ -471,7 +463,6 @@ export default function SettingsScreen() {
               } finally {
                 setLoading(false);
               }
-              */
             }}
           >
             <ThemedText style={[styles.restorePurchasesButtonText, { color: colors.primary }]}>

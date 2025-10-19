@@ -7,11 +7,7 @@ import 'react-native-reanimated';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { isOnboardingCompleted } from '@/services/onboardingService';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/services/supabase';
-import { getCurrentUser } from '@/services/authService';
-// TEMPORARILY DISABLED FOR DEBUGGING - ALL IAP IMPORTS
-// import { shouldShowPaywall } from '@/services/subscriptionService';
-// import { initializeIAP, cleanupIAP } from '@/services/subscriptionService';
+import { shouldShowPaywall, initializeIAP, cleanupIAP } from '@/services/subscriptionService';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -24,8 +20,6 @@ function RootNavigator() {
   const [isReady, setIsReady] = useState(false);
 
   // Initialize IAP connection on app start
-  // TEMPORARILY DISABLED FOR DEBUGGING
-  /*
   useEffect(() => {
     // Wrap in try-catch to prevent crashes
     const setupIAP = async () => {
@@ -49,7 +43,6 @@ function RootNavigator() {
       }
     };
   }, []);
-  */
 
   useEffect(() => {
     async function handleNavigation() {
@@ -78,12 +71,8 @@ function RootNavigator() {
             // Not completed onboarding - redirect to onboarding
             router.replace('/onboarding');
           } else if (completed) {
-            // TEMPORARILY DISABLED: Check if should show paywall
-            // For now, just let users access the app (they still have trial)
-            const showPaywall = false;
-
-            // TODO: Re-enable this once IAP is fixed
-            // const showPaywall = await shouldShowPaywall();
+            // Check if should show paywall (trial expired and no subscription)
+            const showPaywall = await shouldShowPaywall();
 
             if (showPaywall && !inSubscription) {
               // Trial expired, redirect to paywall
