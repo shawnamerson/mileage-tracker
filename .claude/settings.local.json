@@ -12,7 +12,8 @@
       "Bash(cat:*)",
       "Bash(tail -20 \"C:\\Users\\shawn\\mileage-tracker\\app\\(tabs)\\settings.tsx\")",
       "Bash(xargs -I {} bash -c 'echo \"\"\"\"=== {} ===\"\"\"\" && head -20 {}')",
-      "Bash(tail -50 \"C:\\Users\\shawn\\mileage-tracker\\app\\(tabs)\\settings.tsx\")"
+      "Bash(tail -50 \"C:\\Users\\shawn\\mileage-tracker\\app\\(tabs)\\settings.tsx\")",
+      "Bash(git add .)"
     ],
     "deny": [],
     "ask": []

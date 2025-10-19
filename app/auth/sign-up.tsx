@@ -53,7 +53,7 @@ export default function SignUpScreen() {
       if (user) {
         Alert.alert(
           'Success!',
-          'Your account has been created. Your 14-day free trial starts now!',
+          'Your account has been created. Your 30-day free trial starts now!',
           [
             {
               text: 'Get Started',
@@ -89,7 +89,7 @@ export default function SignUpScreen() {
               Create Account
             </ThemedText>
             <ThemedText style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Start your 14-day free trial
+              Start your 30-day free trial
             </ThemedText>
           </View>
 
@@ -190,7 +190,7 @@ export default function SignUpScreen() {
             {/* Trial info */}
             <View style={styles.trialInfo}>
               <ThemedText style={[styles.trialText, { color: colors.textTertiary }]}>
-                14 days free, then $4.99/month. Cancel anytime.
+                30 days free, then subscription required. Cancel anytime.
               </ThemedText>
             </View>
 

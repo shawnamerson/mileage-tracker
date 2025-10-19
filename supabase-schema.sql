@@ -24,7 +24,7 @@ create table public.profiles (
 
   -- Trial tracking
   trial_started_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  trial_ends_at timestamp with time zone default (timezone('utc'::text, now()) + interval '14 days') not null,
+  trial_ends_at timestamp with time zone default (timezone('utc'::text, now()) + interval '30 days') not null,
 
   -- Subscription status (will be managed by Apple IAP)
   subscription_status text default 'trial' check (subscription_status in ('trial', 'active', 'expired', 'cancelled')),
