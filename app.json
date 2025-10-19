@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mileage-tracker",
-    "slug": "mileage-tracker",
+    "name": "MileMate",
+    "slug": "mileage-tracking-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -9,9 +9,25 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.trackmymileage.app",
+      "buildNumber": "15",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app needs access to your location to track mileage and record trip locations.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs continuous access to your location to automatically track trips in the background.",
+        "NSLocationAlwaysUsageDescription": "This app needs continuous access to your location to automatically track trips in the background.",
+        "UIBackgroundModes": [
+          "location"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.mileagetracker.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -19,7 +35,19 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -27,6 +55,15 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Mileage Tracker to use your location to track trips in the background.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -43,6 +80,11 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "f51c52be-77f3-49fc-83a7-6a3e368cbea5"
+      }
     }
   }
 }

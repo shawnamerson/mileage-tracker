@@ -1,0 +1,196 @@
+import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { calculateDistance } from './locationService';
+
+const LOCATION_TASK_NAME = 'background-location-task';
+const ACTIVE_TRIP_KEY = 'active_trip';
+
+export interface ActiveTrip {
+  id: string;
+  startLocation: string;
+  startLatitude: number;
+  startLongitude: number;
+  startTime: number;
+  purpose: 'business' | 'personal' | 'medical' | 'charity' | 'other';
+  notes?: string;
+  distance: number;
+  locationPoints: Array<{
+    latitude: number;
+    longitude: number;
+    timestamp: number;
+  }>;
+  lastLatitude: number;
+  lastLongitude: number;
+}
+
+// Define the background task
+TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
+  if (error) {
+    console.error('Background location task error:', error);
+    return;
+  }
+
+  if (data) {
+    const { locations } = data as { locations: Location.LocationObject[] };
+
+    try {
+      // Get the active trip from storage
+      const activeTripJson = await AsyncStorage.getItem(ACTIVE_TRIP_KEY);
+      if (!activeTripJson) {
+        return;
+      }
+
+      const activeTrip: ActiveTrip = JSON.parse(activeTripJson);
+      const location = locations[0];
+
+      if (location && location.coords) {
+        const { latitude, longitude } = location.coords;
+
+        // Calculate distance from last point
+        const distanceFromLast = calculateDistance(
+          activeTrip.lastLatitude,
+          activeTrip.lastLongitude,
+          latitude,
+          longitude
+        );
+
+        // Only update if moved at least 10 meters (0.006 miles)
+        if (distanceFromLast > 0.006) {
+          activeTrip.distance += distanceFromLast;
+          activeTrip.lastLatitude = latitude;
+          activeTrip.lastLongitude = longitude;
+          activeTrip.locationPoints.push({
+            latitude,
+            longitude,
+            timestamp: Date.now(),
+          });
+
+          // Save updated trip
+          await AsyncStorage.setItem(ACTIVE_TRIP_KEY, JSON.stringify(activeTrip));
+        }
+      }
+    } catch (err) {
+      console.error('Error processing location update:', err);
+    }
+  }
+});
+
+export async function startBackgroundTracking(
+  startLocation: string,
+  startLatitude: number,
+  startLongitude: number,
+  purpose: 'business' | 'personal' | 'medical' | 'charity' | 'other',
+  notes?: string
+): Promise<boolean> {
+  try {
+    // Request background location permission
+    const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
+    if (foregroundStatus !== 'granted') {
+      return false;
+    }
+
+    const { status: backgroundStatus } = await Location.requestBackgroundPermissionsAsync();
+    if (backgroundStatus !== 'granted') {
+      return false;
+    }
+
+    // Create active trip
+    const activeTrip: ActiveTrip = {
+      id: Date.now().toString(),
+      startLocation,
+      startLatitude,
+      startLongitude,
+      startTime: Date.now(),
+      purpose,
+      notes,
+      distance: 0,
+      locationPoints: [
+        {
+          latitude: startLatitude,
+          longitude: startLongitude,
+          timestamp: Date.now(),
+        },
+      ],
+      lastLatitude: startLatitude,
+      lastLongitude: startLongitude,
+    };
+
+    // Save active trip
+    await AsyncStorage.setItem(ACTIVE_TRIP_KEY, JSON.stringify(activeTrip));
+
+    // Start background location updates
+    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
+      accuracy: Location.Accuracy.Balanced,
+      timeInterval: 5000, // Update every 5 seconds
+      distanceInterval: 10, // Update every 10 meters
+      foregroundService: {
+        notificationTitle: 'Tracking Trip',
+        notificationBody: 'Mileage Tracker is recording your trip',
+        notificationColor: '#007AFF',
+      },
+      pausesUpdatesAutomatically: false,
+      showsBackgroundLocationIndicator: true,
+    });
+
+    return true;
+  } catch (error) {
+    console.error('Error starting background tracking:', error);
+    return false;
+  }
+}
+
+export async function stopBackgroundTracking(): Promise<ActiveTrip | null> {
+  try {
+    // Stop location updates
+    const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
+    if (hasStarted) {
+      await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+    }
+
+    // Get and clear active trip
+    const activeTripJson = await AsyncStorage.getItem(ACTIVE_TRIP_KEY);
+    if (activeTripJson) {
+      await AsyncStorage.removeItem(ACTIVE_TRIP_KEY);
+      return JSON.parse(activeTripJson);
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Error stopping background tracking:', error);
+    return null;
+  }
+}
+
+export async function getActiveTrip(): Promise<ActiveTrip | null> {
+  try {
+    // First check if location tracking is actually active
+    const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
+
+    const activeTripJson = await AsyncStorage.getItem(ACTIVE_TRIP_KEY);
+
+    if (activeTripJson) {
+      // If we have trip data but tracking isn't running, clear the stale data
+      if (!hasStarted) {
+        console.log('[BackgroundTracking] Clearing stale trip data - tracking not active');
+        await AsyncStorage.removeItem(ACTIVE_TRIP_KEY);
+        return null;
+      }
+      return JSON.parse(activeTripJson);
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Error getting active trip:', error);
+    return null;
+  }
+}
+
+export async function isTrackingActive(): Promise<boolean> {
+  try {
+    const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
+    return hasStarted;
+  } catch (error) {
+    return false;
+  }
+}

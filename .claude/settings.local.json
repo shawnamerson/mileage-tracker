@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install expo-location expo-sqlite)",
+      "Bash(npm install:*)",
+      "Bash(npx expo start:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx expo export:embed:*)",
+      "Bash(npx expo export:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npx expo install:*)",
+      "Bash(cat:*)",
+      "Bash(tail -20 \"C:\\Users\\shawn\\mileage-tracker\\app\\(tabs)\\settings.tsx\")",
+      "Bash(xargs -I {} bash -c 'echo \"\"\"\"=== {} ===\"\"\"\" && head -20 {}')",
+      "Bash(tail -50 \"C:\\Users\\shawn\\mileage-tracker\\app\\(tabs)\\settings.tsx\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
