@@ -213,7 +213,11 @@ export default function DashboardScreen() {
             <ThemedText style={[styles.activeTripBadge, { color: colors.accent }]}>TRIP IN PROGRESS</ThemedText>
             <ThemedText style={[styles.activeTripArrow, { color: colors.accent }]}>→</ThemedText>
           </ThemedView>
-          <ThemedText style={[styles.activeTripDistance, { color: colors.accent }]}>
+          <ThemedText
+            style={[styles.activeTripDistance, { color: colors.accent }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+          >
             {activeTrip.distance.toFixed(2)} miles
           </ThemedText>
           <ThemedText style={[styles.activeTripLocation, { color: colors.textSecondary }]} numberOfLines={2} ellipsizeMode="tail">
