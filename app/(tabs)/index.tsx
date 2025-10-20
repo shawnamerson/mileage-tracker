@@ -7,7 +7,6 @@ import { getTripStatsForYear, getAllTrips, getBusinessDeductibleValueForYear } f
 import { Trip } from '@/services/database';
 import { useFocusEffect } from '@react-navigation/native';
 import { getActiveTrip, isTrackingActive, ActiveTrip } from '@/services/backgroundTracking';
-import { isAutoTrackingActive } from '@/services/autoTracking';
 import { performAutoBackup, isBackupRecommended } from '@/services/backupService';
 import { useRouter } from 'expo-router';
 import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
@@ -77,7 +76,6 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [tracking, setTracking] = useState(false);
-  const [autoTracking, setAutoTracking] = useState(false);
   const [activeTrip, setActiveTrip] = useState<ActiveTrip | null>(null);
   const [stats, setStats] = useState({
     totalTrips: 0,
@@ -105,13 +103,11 @@ export default function DashboardScreen() {
       setRecentTrips(trips.slice(0, 3));
       setShowBackupReminder(backupRecommended);
 
-      // Check for active trip and auto-tracking
+      // Check for active trip
       const isActive = await isTrackingActive();
       const trip = await getActiveTrip();
-      const autoActive = await isAutoTrackingActive();
       setTracking(isActive);
       setActiveTrip(trip);
-      setAutoTracking(autoActive);
 
       // Perform auto-backup if needed (runs in background, doesn't block UI)
       performAutoBackup().catch((error) => {
@@ -169,21 +165,6 @@ export default function DashboardScreen() {
         <ThemedText type="title">Mileage Tracker</ThemedText>
         <ThemedText style={styles.subtitle}>{currentYear} Year-to-Date</ThemedText>
       </ThemedView>
-
-      {/* Auto-Tracking Status Banner */}
-      {autoTracking && !tracking && (
-        <TouchableOpacity
-          style={[styles.autoTrackingBanner, { backgroundColor: colors.surface, borderColor: colors.primary }]}
-          onPress={() => router.push('/(tabs)/settings')}
-        >
-          <ThemedText style={[styles.autoTrackingText, { color: colors.primary }]}>
-            🤖 Auto-tracking enabled • Monitoring for drives
-          </ThemedText>
-          <ThemedText style={[styles.autoTrackingSubtext, { color: colors.textSecondary }]}>
-            Tap to configure
-          </ThemedText>
-        </TouchableOpacity>
-      )}
 
       {/* Backup Reminder Banner */}
       {showBackupReminder && (
@@ -525,21 +506,6 @@ const styles = StyleSheet.create({
   activeTripTap: {
     fontSize: Typography.xs,
     fontStyle: 'italic',
-  },
-  autoTrackingBanner: {
-    padding: Spacing.lg,
-    borderRadius: BorderRadius.lg,
-    marginBottom: Spacing.lg,
-    borderWidth: 1.5,
-    ...Shadows.md,
-  },
-  autoTrackingText: {
-    fontSize: Typography.sm,
-    fontWeight: Typography.semibold,
-    marginBottom: Spacing.xs,
-  },
-  autoTrackingSubtext: {
-    fontSize: Typography.xs,
   },
   backupReminderBanner: {
     padding: Spacing.lg,
