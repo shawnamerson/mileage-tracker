@@ -1,32 +1,45 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-const VEHICLES_KEY = 'vehicles';
-const ACTIVE_VEHICLE_KEY = 'active_vehicle_id';
+import { supabase } from './supabase';
+import { getCurrentUser } from './authService';
 
 export interface Vehicle {
   id: string;
+  user_id: string;
   name: string;
   make?: string;
   model?: string;
   year?: string;
-  initialMileage: number;
-  currentMileage: number;
-  bluetoothDeviceId?: string;
-  bluetoothDeviceName?: string;
-  dateAdded: number;
-  lastUpdated: number;
+  initial_mileage: number;
+  current_mileage: number;
+  bluetooth_device_id?: string;
+  bluetooth_device_name?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 /**
- * Get all vehicles
+ * Get all vehicles for current user
  */
 export async function getAllVehicles(): Promise<Vehicle[]> {
   try {
-    const data = await AsyncStorage.getItem(VEHICLES_KEY);
-    if (!data) {
+    const user = await getCurrentUser();
+    if (!user) {
+      console.error('No user logged in');
       return [];
     }
-    return JSON.parse(data);
+
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error getting vehicles:', error);
+      return [];
+    }
+
+    return data || [];
   } catch (error) {
     console.error('Error getting vehicles:', error);
     return [];
@@ -38,8 +51,25 @@ export async function getAllVehicles(): Promise<Vehicle[]> {
  */
 export async function getVehicle(id: string): Promise<Vehicle | null> {
   try {
-    const vehicles = await getAllVehicles();
-    return vehicles.find(v => v.id === id) || null;
+    const user = await getCurrentUser();
+    if (!user) {
+      console.error('No user logged in');
+      return null;
+    }
+
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .single();
+
+    if (error) {
+      console.error('Error getting vehicle:', error);
+      return null;
+    }
+
+    return data;
   } catch (error) {
     console.error('Error getting vehicle:', error);
     return null;
@@ -51,14 +81,33 @@ export async function getVehicle(id: string): Promise<Vehicle | null> {
  */
 export async function getActiveVehicle(): Promise<Vehicle | null> {
   try {
-    const activeId = await AsyncStorage.getItem(ACTIVE_VEHICLE_KEY);
-    if (activeId) {
-      return await getVehicle(activeId);
+    const user = await getCurrentUser();
+    if (!user) {
+      console.error('No user logged in');
+      return null;
     }
 
-    // If no active vehicle set, return the first one
+    // Try to get the vehicle marked as active
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('is_active', true)
+      .single();
+
+    if (!error && data) {
+      return data;
+    }
+
+    // If no active vehicle, return the first one
     const vehicles = await getAllVehicles();
-    return vehicles.length > 0 ? vehicles[0] : null;
+    if (vehicles.length > 0) {
+      // Set the first one as active
+      await setActiveVehicle(vehicles[0].id);
+      return vehicles[0];
+    }
+
+    return null;
   } catch (error) {
     console.error('Error getting active vehicle:', error);
     return null;
@@ -70,7 +119,28 @@ export async function getActiveVehicle(): Promise<Vehicle | null> {
  */
 export async function setActiveVehicle(id: string): Promise<void> {
   try {
-    await AsyncStorage.setItem(ACTIVE_VEHICLE_KEY, id);
+    const user = await getCurrentUser();
+    if (!user) {
+      throw new Error('No user logged in');
+    }
+
+    // First, set all vehicles to inactive
+    await supabase
+      .from('vehicles')
+      .update({ is_active: false })
+      .eq('user_id', user.id);
+
+    // Then set the selected vehicle as active
+    const { error } = await supabase
+      .from('vehicles')
+      .update({ is_active: true })
+      .eq('id', id)
+      .eq('user_id', user.id);
+
+    if (error) {
+      console.error('Error setting active vehicle:', error);
+      throw error;
+    }
   } catch (error) {
     console.error('Error setting active vehicle:', error);
     throw error;
@@ -81,28 +151,41 @@ export async function setActiveVehicle(id: string): Promise<void> {
  * Create a new vehicle
  */
 export async function createVehicle(
-  vehicle: Omit<Vehicle, 'id' | 'dateAdded' | 'lastUpdated' | 'currentMileage'>
+  vehicle: Omit<Vehicle, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'current_mileage' | 'is_active'>
 ): Promise<Vehicle> {
   try {
-    const vehicles = await getAllVehicles();
-
-    const newVehicle: Vehicle = {
-      ...vehicle,
-      id: generateId(),
-      currentMileage: vehicle.initialMileage,
-      dateAdded: Date.now(),
-      lastUpdated: Date.now(),
-    };
-
-    vehicles.push(newVehicle);
-    await AsyncStorage.setItem(VEHICLES_KEY, JSON.stringify(vehicles));
-
-    // If this is the first vehicle, make it active
-    if (vehicles.length === 1) {
-      await setActiveVehicle(newVehicle.id);
+    const user = await getCurrentUser();
+    if (!user) {
+      throw new Error('No user logged in');
     }
 
-    return newVehicle;
+    // Check if this is the first vehicle
+    const vehicles = await getAllVehicles();
+    const isFirstVehicle = vehicles.length === 0;
+
+    const { data, error } = await supabase
+      .from('vehicles')
+      .insert({
+        user_id: user.id,
+        name: vehicle.name,
+        make: vehicle.make,
+        model: vehicle.model,
+        year: vehicle.year,
+        initial_mileage: vehicle.initial_mileage,
+        current_mileage: vehicle.initial_mileage,
+        bluetooth_device_id: vehicle.bluetooth_device_id,
+        bluetooth_device_name: vehicle.bluetooth_device_name,
+        is_active: isFirstVehicle, // First vehicle is automatically active
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating vehicle:', error);
+      throw error;
+    }
+
+    return data;
   } catch (error) {
     console.error('Error creating vehicle:', error);
     throw error;
@@ -114,24 +197,28 @@ export async function createVehicle(
  */
 export async function updateVehicle(
   id: string,
-  updates: Partial<Omit<Vehicle, 'id' | 'dateAdded'>>
+  updates: Partial<Omit<Vehicle, 'id' | 'user_id' | 'created_at' | 'updated_at'>>
 ): Promise<Vehicle | null> {
   try {
-    const vehicles = await getAllVehicles();
-    const index = vehicles.findIndex(v => v.id === id);
-
-    if (index === -1) {
-      return null;
+    const user = await getCurrentUser();
+    if (!user) {
+      throw new Error('No user logged in');
     }
 
-    vehicles[index] = {
-      ...vehicles[index],
-      ...updates,
-      lastUpdated: Date.now(),
-    };
+    const { data, error } = await supabase
+      .from('vehicles')
+      .update(updates)
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .select()
+      .single();
 
-    await AsyncStorage.setItem(VEHICLES_KEY, JSON.stringify(vehicles));
-    return vehicles[index];
+    if (error) {
+      console.error('Error updating vehicle:', error);
+      throw error;
+    }
+
+    return data;
   } catch (error) {
     console.error('Error updating vehicle:', error);
     throw error;
@@ -143,16 +230,32 @@ export async function updateVehicle(
  */
 export async function deleteVehicle(id: string): Promise<void> {
   try {
-    const vehicles = await getAllVehicles();
-    const filtered = vehicles.filter(v => v.id !== id);
-    await AsyncStorage.setItem(VEHICLES_KEY, JSON.stringify(filtered));
+    const user = await getCurrentUser();
+    if (!user) {
+      throw new Error('No user logged in');
+    }
+
+    // Check if this was the active vehicle
+    const vehicle = await getVehicle(id);
+    const wasActive = vehicle?.is_active;
+
+    const { error } = await supabase
+      .from('vehicles')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', user.id);
+
+    if (error) {
+      console.error('Error deleting vehicle:', error);
+      throw error;
+    }
 
     // If we deleted the active vehicle, set a new active vehicle
-    const activeId = await AsyncStorage.getItem(ACTIVE_VEHICLE_KEY);
-    if (activeId === id && filtered.length > 0) {
-      await setActiveVehicle(filtered[0].id);
-    } else if (filtered.length === 0) {
-      await AsyncStorage.removeItem(ACTIVE_VEHICLE_KEY);
+    if (wasActive) {
+      const remaining = await getAllVehicles();
+      if (remaining.length > 0) {
+        await setActiveVehicle(remaining[0].id);
+      }
     }
   } catch (error) {
     console.error('Error deleting vehicle:', error);
@@ -173,9 +276,9 @@ export async function updateVehicleMileage(
       return null;
     }
 
-    const newMileage = vehicle.currentMileage + additionalMiles;
+    const newMileage = vehicle.current_mileage + additionalMiles;
     return await updateVehicle(vehicleId, {
-      currentMileage: newMileage,
+      current_mileage: newMileage,
     });
   } catch (error) {
     console.error('Error updating vehicle mileage:', error);
@@ -190,8 +293,25 @@ export async function getVehicleByBluetoothDevice(
   bluetoothDeviceId: string
 ): Promise<Vehicle | null> {
   try {
-    const vehicles = await getAllVehicles();
-    return vehicles.find(v => v.bluetoothDeviceId === bluetoothDeviceId) || null;
+    const user = await getCurrentUser();
+    if (!user) {
+      console.error('No user logged in');
+      return null;
+    }
+
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('bluetooth_device_id', bluetoothDeviceId)
+      .single();
+
+    if (error) {
+      console.error('Error getting vehicle by Bluetooth device:', error);
+      return null;
+    }
+
+    return data;
   } catch (error) {
     console.error('Error getting vehicle by Bluetooth device:', error);
     return null;
@@ -208,8 +328,8 @@ export async function linkBluetoothToVehicle(
 ): Promise<Vehicle | null> {
   try {
     return await updateVehicle(vehicleId, {
-      bluetoothDeviceId,
-      bluetoothDeviceName,
+      bluetooth_device_id: bluetoothDeviceId,
+      bluetooth_device_name: bluetoothDeviceName,
     });
   } catch (error) {
     console.error('Error linking Bluetooth to vehicle:', error);
@@ -224,17 +344,10 @@ export async function getTotalMilesDriven(): Promise<number> {
   try {
     const vehicles = await getAllVehicles();
     return vehicles.reduce((total, vehicle) => {
-      return total + (vehicle.currentMileage - vehicle.initialMileage);
+      return total + (vehicle.current_mileage - vehicle.initial_mileage);
     }, 0);
   } catch (error) {
     console.error('Error getting total miles driven:', error);
     return 0;
   }
-}
-
-/**
- * Generate a unique ID for a vehicle
- */
-function generateId(): string {
-  return `vehicle_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 }
