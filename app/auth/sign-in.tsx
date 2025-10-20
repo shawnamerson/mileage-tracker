@@ -69,10 +69,10 @@ export default function SignInScreen() {
               resizeMode="contain"
             />
             <ThemedText type="title" style={styles.title}>
-              Welcome Back
+              Welcome to MileMate
             </ThemedText>
             <ThemedText style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Sign in to access your mileage tracker
+              Sign in with Apple to continue
             </ThemedText>
           </View>
 
@@ -123,8 +123,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   logo: {
-    width: 320,
-    height: 110,
+    width: 380,
+    height: 130,
     marginBottom: 24,
   },
   title: {

@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.trackmymileage.app",
-      "buildNumber": "17",
+      "buildNumber": "19",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to your location to track mileage and record trip locations.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs continuous access to your location to automatically track trips in the background.",
