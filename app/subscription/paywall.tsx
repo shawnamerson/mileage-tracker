@@ -161,7 +161,7 @@ export default function PaywallScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Image
-          source={require('@/assets/Wordmark.png')}
+          source={require('@/assets/images/wordmark.png')}
           style={styles.logo}
           resizeMode="contain"
         />

@@ -64,7 +64,7 @@ export default function SignInScreen() {
           {/* Logo/Title */}
           <View style={styles.header}>
             <Image
-              source={require('@/assets/Wordmark.png')}
+              source={require('@/assets/images/wordmark.png')}
               style={styles.logo}
               resizeMode="contain"
             />

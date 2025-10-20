@@ -116,7 +116,7 @@ export default function OnboardingScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={styles.content}>
             <Image
-              source={require('@/assets/Wordmark.png')}
+              source={require('@/assets/images/wordmark.png')}
               style={styles.logo}
               resizeMode="contain"
             />

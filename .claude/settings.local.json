@@ -13,7 +13,16 @@
       "Bash(tail -20 \"C:\\Users\\shawn\\mileage-tracker\\app\\(tabs)\\settings.tsx\")",
       "Bash(xargs -I {} bash -c 'echo \"\"\"\"=== {} ===\"\"\"\" && head -20 {}')",
       "Bash(tail -50 \"C:\\Users\\shawn\\mileage-tracker\\app\\(tabs)\\settings.tsx\")",
-      "Bash(git add .)"
+      "Bash(git add .)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nUpdate trial period to 30 days and fix navigation issues - Build 16\n\n- Change trial period from 14 to 30 days in schema and sign-up flow\n- Fix auth header appearing on authentication screens\n- Re-enable full IAP functionality with proper error handling\n- Update build number to 16\n- Configure EAS secrets for Supabase credentials\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push origin main)",
+      "Bash(eas build --platform ios --profile production)",
+      "Bash(git add app/onboarding/_layout.tsx)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nAdd onboarding layout to fix route warning\n\n- Create app/onboarding/_layout.tsx to match folder structure\n- Fixes \"no route named 'onboarding' exists\" warning\n- Makes routing structure consistent with auth and subscription\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git add app/auth/sign-in.tsx app/auth/sign-up.tsx app/onboarding/index.tsx app/subscription/paywall.tsx)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nAdd MileMate wordmark branding to key screens\n\n- Add wordmark to sign-in and sign-up pages\n- Add wordmark to onboarding welcome screen\n- Add wordmark to paywall screen\n- Ensures consistent branding throughout the app\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git add assets/Wordmark.png assets/images/wordmark.png app/auth/sign-in.tsx app/auth/sign-up.tsx app/onboarding/index.tsx app/subscription/paywall.tsx)",
+      "Bash(git add -A)"
     ],
     "deny": [],
     "ask": []
