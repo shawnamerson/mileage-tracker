@@ -148,10 +148,10 @@ export async function stopBackgroundTracking(): Promise<ActiveTrip | null> {
       await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
     }
 
-    // Get and clear active trip
+    // Get active trip but DON'T clear it yet
+    // Data will be cleared after successful save to prevent data loss
     const activeTripJson = await AsyncStorage.getItem(ACTIVE_TRIP_KEY);
     if (activeTripJson) {
-      await AsyncStorage.removeItem(ACTIVE_TRIP_KEY);
       return JSON.parse(activeTripJson);
     }
 
@@ -162,20 +162,23 @@ export async function stopBackgroundTracking(): Promise<ActiveTrip | null> {
   }
 }
 
+/**
+ * Clear the active trip from storage
+ * Call this ONLY after successfully saving the trip to database
+ */
+export async function clearActiveTrip(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(ACTIVE_TRIP_KEY);
+  } catch (error) {
+    console.error('Error clearing active trip:', error);
+  }
+}
+
 export async function getActiveTrip(): Promise<ActiveTrip | null> {
   try {
-    // First check if location tracking is actually active
-    const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
-
     const activeTripJson = await AsyncStorage.getItem(ACTIVE_TRIP_KEY);
 
     if (activeTripJson) {
-      // If we have trip data but tracking isn't running, clear the stale data
-      if (!hasStarted) {
-        console.log('[BackgroundTracking] Clearing stale trip data - tracking not active');
-        await AsyncStorage.removeItem(ACTIVE_TRIP_KEY);
-        return null;
-      }
       return JSON.parse(activeTripJson);
     }
 

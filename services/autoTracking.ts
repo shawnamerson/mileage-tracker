@@ -1,7 +1,7 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { startBackgroundTracking, stopBackgroundTracking, isTrackingActive } from './backgroundTracking';
+import { startBackgroundTracking, stopBackgroundTracking, clearActiveTrip, isTrackingActive } from './backgroundTracking';
 import { reverseGeocode, getCurrentLocation } from './locationService';
 import { createTrip } from './tripService';
 import { sendTripCompletedNotification } from './notificationService';
@@ -177,6 +177,9 @@ async function autoStopTrip() {
 
       const tripId = await createTrip(tripData);
 
+      // Only clear trip data AFTER successful save
+      await clearActiveTrip();
+
       console.log(`[AutoTracking] ✅ Trip saved successfully with ID: ${tripId}`);
       console.log(`[AutoTracking] Trip details: ${tripData.distance.toFixed(2)} miles from ${tripData.startLocation} to ${tripData.endLocation}`);
 
@@ -195,6 +198,8 @@ async function autoStopTrip() {
       }
     } else {
       console.log(`[AutoTracking] ❌ Trip too short (${completedTrip.distance.toFixed(2)} miles < ${MIN_TRIP_DISTANCE} miles minimum), discarding`);
+      // Clear trip data even if too short
+      await clearActiveTrip();
     }
   } catch (error) {
     console.error('[AutoTracking] ❌ Error auto-stopping trip:', error);
@@ -251,6 +256,8 @@ export async function stopAutoTracking(): Promise<void> {
     const isTracking = await isTrackingActive();
     if (isTracking) {
       await stopBackgroundTracking();
+      // Clear trip data when manually stopping auto-tracking
+      await clearActiveTrip();
     }
 
     await AsyncStorage.setItem(AUTO_TRACKING_ENABLED_KEY, 'false');

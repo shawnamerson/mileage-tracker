@@ -19,6 +19,7 @@ import {
 import {
   startBackgroundTracking,
   stopBackgroundTracking,
+  clearActiveTrip,
   getActiveTrip,
   isTrackingActive,
   ActiveTrip,
@@ -156,6 +157,9 @@ export default function AddTripScreen() {
               notes: completedTrip.notes,
             });
 
+            // Only clear trip data AFTER successful save
+            await clearActiveTrip();
+
             setTracking(false);
             setActiveTrip(null);
             setPurpose('business');
@@ -169,7 +173,7 @@ export default function AddTripScreen() {
             ]);
           } catch (error) {
             console.error('Error stopping trip:', error);
-            Alert.alert('Error', 'Failed to save trip');
+            Alert.alert('Error', 'Failed to save trip. You can try again from the home screen.');
           } finally {
             setLoading(false);
           }
