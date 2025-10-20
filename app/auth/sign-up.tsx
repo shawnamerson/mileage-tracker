@@ -44,7 +44,7 @@ export default function SignUpScreen() {
 
     setLoading(true);
     try {
-      const { user, error } = await signUp(email, password);
+      const { user, session, error } = await signUp(email, password);
 
       if (error) {
         Alert.alert('Sign Up Failed', error.message);
@@ -52,19 +52,23 @@ export default function SignUpScreen() {
       }
 
       if (user) {
-        Alert.alert(
-          'Success!',
-          'Your account has been created. Your 30-day free trial starts now!',
-          [
-            {
-              text: 'Get Started',
-              onPress: () => {
-                // Navigation is handled automatically by AuthContext
-                console.log('Signed up successfully');
+        // Check if session was created (no email confirmation required)
+        if (session) {
+          // User is automatically signed in, navigation will happen via AuthContext
+          console.log('Signed up and signed in successfully');
+        } else {
+          // Email confirmation required
+          Alert.alert(
+            'Check Your Email',
+            'Please check your email and click the confirmation link to activate your account.',
+            [
+              {
+                text: 'OK',
+                onPress: () => router.replace('/auth/sign-in'),
               },
-            },
-          ]
-        );
+            ]
+          );
+        }
       }
     } catch (error) {
       Alert.alert('Error', 'An unexpected error occurred');
