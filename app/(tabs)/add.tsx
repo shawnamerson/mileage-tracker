@@ -226,7 +226,11 @@ export default function AddTripScreen() {
   };
 
   const handleSaveManualTrip = async () => {
-    if (!startLocation || !endLocation || !distance) {
+    // Trim inputs to remove whitespace
+    const trimmedStart = startLocation.trim();
+    const trimmedEnd = endLocation.trim();
+
+    if (!trimmedStart || !trimmedEnd || !distance) {
       Alert.alert('Missing Information', 'Please fill in all required fields');
       return;
     }
@@ -241,8 +245,8 @@ export default function AddTripScreen() {
     try {
       const now = Date.now();
       await createTrip({
-        startLocation,
-        endLocation,
+        startLocation: trimmedStart,
+        endLocation: trimmedEnd,
         startLatitude: startCoords?.latitude,
         startLongitude: startCoords?.longitude,
         endLatitude: endCoords?.latitude,
