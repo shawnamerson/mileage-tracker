@@ -1,9 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
-  TextInput,
-  TouchableOpacity,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
@@ -11,31 +9,33 @@ import {
   ScrollView,
   Image,
 } from 'react-native';
-import { Link, router } from 'expo-router';
+import { router } from 'expo-router';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useColors, useShadows } from '@/constants/Design';
-import { signIn } from '@/services/authService';
+import { signInWithApple, isAppleAuthAvailable } from '@/services/authService';
 
 export default function SignInScreen() {
   const colors = useColors();
   const shadows = useShadows();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [appleAuthAvailable, setAppleAuthAvailable] = useState(false);
 
-  const handleSignIn = async () => {
-    if (!email || !password) {
-      Alert.alert('Error', 'Please enter your email and password');
-      return;
-    }
+  useEffect(() => {
+    // Check if Apple Auth is available
+    isAppleAuthAvailable().then(setAppleAuthAvailable);
+  }, []);
 
+  const handleAppleSignIn = async () => {
     setLoading(true);
     try {
-      const { user, error } = await signIn(email, password);
+      const { user, error } = await signInWithApple();
 
       if (error) {
-        Alert.alert('Sign In Failed', error.message);
+        if (error.message !== 'Sign in cancelled') {
+          Alert.alert('Sign In Failed', error.message);
+        }
         return;
       }
 
@@ -76,83 +76,30 @@ export default function SignInScreen() {
             </ThemedText>
           </View>
 
-          {/* Form */}
+          {/* Apple Sign In Button */}
           <View style={styles.form}>
-            <View style={styles.inputContainer}>
-              <ThemedText style={[styles.label, { color: colors.textSecondary }]}>
-                Email
-              </ThemedText>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
-                    color: colors.text,
-                  },
-                  shadows.sm,
-                ]}
-                placeholder="you@example.com"
-                placeholderTextColor={colors.textTertiary}
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                autoComplete="email"
-                textContentType="emailAddress"
-                editable={!loading}
+            {appleAuthAvailable ? (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={12}
+                style={styles.appleButton}
+                onPress={handleAppleSignIn}
+                disabled={loading}
               />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <ThemedText style={[styles.label, { color: colors.textSecondary }]}>
-                Password
-              </ThemedText>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
-                    color: colors.text,
-                  },
-                  shadows.sm,
-                ]}
-                placeholder="Enter your password"
-                placeholderTextColor={colors.textTertiary}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                autoCapitalize="none"
-                autoComplete="password"
-                textContentType="password"
-                editable={!loading}
-              />
-            </View>
-
-            <TouchableOpacity
-              style={[styles.button, { backgroundColor: colors.primary }]}
-              onPress={handleSignIn}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <ThemedText style={[styles.buttonText, { color: colors.textInverse }]}>
-                  Sign In
+            ) : (
+              <View style={[styles.appleButton, styles.unavailableButton]}>
+                <ThemedText style={styles.unavailableText}>
+                  Apple Sign In not available on this device
                 </ThemedText>
-              )}
-            </TouchableOpacity>
+              </View>
+            )}
 
-            {/* Links */}
-            <View style={styles.links}>
-              <ThemedText style={{ color: colors.textSecondary }}>
-                Don't have an account?{' '}
-                <Link href="/auth/sign-up" style={{ color: colors.primary }}>
-                  Sign Up
-                </Link>
-              </ThemedText>
-            </View>
+            {loading && (
+              <View style={styles.loadingOverlay}>
+                <ActivityIndicator size="large" color={colors.primary} />
+              </View>
+            )}
           </View>
         </ThemedView>
       </ScrollView>
@@ -190,34 +137,22 @@ const styles = StyleSheet.create({
   form: {
     width: '100%',
   },
-  inputContainer: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    marginBottom: 8,
-    fontWeight: '600',
-  },
-  input: {
+  appleButton: {
+    width: '100%',
     height: 50,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    fontSize: 16,
   },
-  button: {
-    height: 50,
+  unavailableButton: {
+    backgroundColor: '#ccc',
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 8,
   },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: '600',
+  unavailableText: {
+    fontSize: 14,
+    textAlign: 'center',
   },
-  links: {
-    marginTop: 24,
+  loadingOverlay: {
+    marginTop: 20,
     alignItems: 'center',
   },
 });

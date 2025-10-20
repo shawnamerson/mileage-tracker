@@ -1,9 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
-  TextInput,
-  TouchableOpacity,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
@@ -12,63 +10,38 @@ import {
   Image,
 } from 'react-native';
 import { Link, router } from 'expo-router';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useColors, useShadows } from '@/constants/Design';
-import { signUp } from '@/services/authService';
+import { signInWithApple, isAppleAuthAvailable } from '@/services/authService';
 
 export default function SignUpScreen() {
   const colors = useColors();
   const shadows = useShadows();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [appleAuthAvailable, setAppleAuthAvailable] = useState(false);
 
-  const handleSignUp = async () => {
-    // Validation
-    if (!email || !password || !confirmPassword) {
-      Alert.alert('Error', 'Please fill in all fields');
-      return;
-    }
+  useEffect(() => {
+    // Check if Apple Auth is available
+    isAppleAuthAvailable().then(setAppleAuthAvailable);
+  }, []);
 
-    if (password !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match');
-      return;
-    }
-
-    if (password.length < 6) {
-      Alert.alert('Error', 'Password must be at least 6 characters');
-      return;
-    }
-
+  const handleAppleSignIn = async () => {
     setLoading(true);
     try {
-      const { user, session, error } = await signUp(email, password);
+      const { user, error } = await signInWithApple();
 
       if (error) {
-        Alert.alert('Sign Up Failed', error.message);
+        if (error.message !== 'Sign in cancelled') {
+          Alert.alert('Sign In Failed', error.message);
+        }
         return;
       }
 
       if (user) {
-        // Check if session was created (no email confirmation required)
-        if (session) {
-          // User is automatically signed in, navigation will happen via AuthContext
-          console.log('Signed up and signed in successfully');
-        } else {
-          // Email confirmation required
-          Alert.alert(
-            'Check Your Email',
-            'Please check your email and click the confirmation link to activate your account.',
-            [
-              {
-                text: 'OK',
-                onPress: () => router.replace('/auth/sign-in'),
-              },
-            ]
-          );
-        }
+        // Navigation is handled automatically by AuthContext
+        console.log('Signed in successfully');
       }
     } catch (error) {
       Alert.alert('Error', 'An unexpected error occurred');
@@ -96,106 +69,37 @@ export default function SignUpScreen() {
               resizeMode="contain"
             />
             <ThemedText type="title" style={styles.title}>
-              Create Account
+              Get Started
             </ThemedText>
             <ThemedText style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Get started with MileMate
+              Sign in with Apple to start tracking your mileage
             </ThemedText>
           </View>
 
-          {/* Form */}
+          {/* Apple Sign In Button */}
           <View style={styles.form}>
-            <View style={styles.inputContainer}>
-              <ThemedText style={[styles.label, { color: colors.textSecondary }]}>
-                Email
-              </ThemedText>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
-                    color: colors.text,
-                  },
-                  shadows.sm,
-                ]}
-                placeholder="you@example.com"
-                placeholderTextColor={colors.textTertiary}
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                autoComplete="email"
-                textContentType="emailAddress"
-                editable={!loading}
+            {appleAuthAvailable ? (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={12}
+                style={styles.appleButton}
+                onPress={handleAppleSignIn}
+                disabled={loading}
               />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <ThemedText style={[styles.label, { color: colors.textSecondary }]}>
-                Password
-              </ThemedText>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
-                    color: colors.text,
-                  },
-                  shadows.sm,
-                ]}
-                placeholder="At least 6 characters"
-                placeholderTextColor={colors.textTertiary}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                autoCapitalize="none"
-                autoComplete="password-new"
-                textContentType="newPassword"
-                editable={!loading}
-              />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <ThemedText style={[styles.label, { color: colors.textSecondary }]}>
-                Confirm Password
-              </ThemedText>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
-                    color: colors.text,
-                  },
-                  shadows.sm,
-                ]}
-                placeholder="Re-enter your password"
-                placeholderTextColor={colors.textTertiary}
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                secureTextEntry
-                autoCapitalize="none"
-                autoComplete="password-new"
-                textContentType="newPassword"
-                editable={!loading}
-              />
-            </View>
-
-            <TouchableOpacity
-              style={[styles.button, { backgroundColor: colors.primary }]}
-              onPress={handleSignUp}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <ThemedText style={[styles.buttonText, { color: colors.textInverse }]}>
-                  Create Account
+            ) : (
+              <View style={[styles.appleButton, styles.unavailableButton]}>
+                <ThemedText style={styles.unavailableText}>
+                  Apple Sign In not available on this device
                 </ThemedText>
-              )}
-            </TouchableOpacity>
+              </View>
+            )}
+
+            {loading && (
+              <View style={styles.loadingOverlay}>
+                <ActivityIndicator size="large" color={colors.primary} />
+              </View>
+            )}
 
             {/* Links */}
             <View style={styles.links}>
@@ -243,42 +147,26 @@ const styles = StyleSheet.create({
   form: {
     width: '100%',
   },
-  inputContainer: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    marginBottom: 8,
-    fontWeight: '600',
-  },
-  input: {
+  appleButton: {
+    width: '100%',
     height: 50,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    fontSize: 16,
   },
-  button: {
-    height: 50,
+  unavailableButton: {
+    backgroundColor: '#ccc',
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 8,
   },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  trialInfo: {
-    marginTop: 16,
-    alignItems: 'center',
-  },
-  trialText: {
+  unavailableText: {
     fontSize: 14,
     textAlign: 'center',
   },
+  loadingOverlay: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
   links: {
-    marginTop: 16,
+    marginTop: 24,
     alignItems: 'center',
   },
 });

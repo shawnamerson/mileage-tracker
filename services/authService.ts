@@ -1,10 +1,73 @@
 import { supabase, Profile } from './supabase';
 import { Session, User, AuthError } from '@supabase/supabase-js';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import { Platform } from 'react-native';
 
 export interface AuthResult {
   user: User | null;
   session: Session | null;
   error: AuthError | null;
+}
+
+/**
+ * Check if Apple Authentication is available on this device
+ */
+export async function isAppleAuthAvailable(): Promise<boolean> {
+  if (Platform.OS !== 'ios') {
+    return false;
+  }
+  try {
+    return await AppleAuthentication.isAvailableAsync();
+  } catch (error) {
+    console.error('Error checking Apple Auth availability:', error);
+    return false;
+  }
+}
+
+/**
+ * Sign in with Apple
+ */
+export async function signInWithApple(): Promise<AuthResult> {
+  try {
+    const credential = await AppleAuthentication.signInAsync({
+      requestedScopes: [
+        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+        AppleAuthentication.AppleAuthenticationScope.EMAIL,
+      ],
+    });
+
+    // Sign in to Supabase with Apple ID token
+    const { data, error } = await supabase.auth.signInWithIdToken({
+      provider: 'apple',
+      token: credential.identityToken!,
+      nonce: credential.nonce,
+    });
+
+    if (error) {
+      console.error('Apple sign in error:', error);
+      return { user: null, session: null, error };
+    }
+
+    console.log('User signed in with Apple successfully:', data.user?.email);
+    return { user: data.user, session: data.session, error: null };
+  } catch (error: any) {
+    console.error('Unexpected Apple sign in error:', error);
+
+    // User cancelled the sign-in
+    if (error.code === 'ERR_REQUEST_CANCELED') {
+      return {
+        user: null,
+        session: null,
+        error: { message: 'Sign in cancelled', name: 'AuthError', status: 400 } as AuthError,
+      };
+    }
+
+    return {
+      user: null,
+      session: null,
+      error: error as AuthError,
+    };
+  }
 }
 
 /**
