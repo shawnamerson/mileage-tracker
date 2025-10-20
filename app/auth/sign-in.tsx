@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Image,
 } from 'react-native';
 import { Link, router } from 'expo-router';
 import { ThemedText } from '@/components/themed-text';
@@ -62,6 +63,11 @@ export default function SignInScreen() {
         <ThemedView style={styles.content}>
           {/* Logo/Title */}
           <View style={styles.header}>
+            <Image
+              source={require('@/assets/Wordmark.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
             <ThemedText type="title" style={styles.title}>
               Welcome Back
             </ThemedText>
@@ -168,6 +174,11 @@ const styles = StyleSheet.create({
   header: {
     marginBottom: 40,
     alignItems: 'center',
+  },
+  logo: {
+    width: 250,
+    height: 80,
+    marginBottom: 24,
   },
   title: {
     marginBottom: 8,

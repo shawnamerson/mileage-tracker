@@ -7,6 +7,7 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  Image,
 } from 'react-native';
 import { router } from 'expo-router';
 import { ThemedText } from '@/components/themed-text';
@@ -114,8 +115,13 @@ export default function OnboardingScreen() {
       <ThemedView style={styles.container}>
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={styles.content}>
+            <Image
+              source={require('@/assets/Wordmark.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
             <ThemedText type="title" style={styles.title}>
-              Welcome to Mileage Tracker
+              Welcome to MileMate
             </ThemedText>
 
             <View style={styles.featureList}>
@@ -319,6 +325,12 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 24,
     paddingTop: 60,
+  },
+  logo: {
+    width: 280,
+    height: 100,
+    marginBottom: 24,
+    alignSelf: 'center',
   },
   title: {
     marginBottom: 16,

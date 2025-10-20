@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Image,
 } from 'react-native';
 import { router } from 'expo-router';
 import { ThemedText } from '@/components/themed-text';
@@ -159,6 +160,11 @@ export default function PaywallScreen() {
     >
       {/* Header */}
       <View style={styles.header}>
+        <Image
+          source={require('@/assets/Wordmark.png')}
+          style={styles.logo}
+          resizeMode="contain"
+        />
         <ThemedText type="title" style={styles.title}>
           {isTrialExpired ? 'Upgrade to Premium' : 'Your Trial is Ending Soon'}
         </ThemedText>
@@ -346,6 +352,11 @@ const styles = StyleSheet.create({
   header: {
     marginBottom: Spacing.xl,
     alignItems: 'center',
+  },
+  logo: {
+    width: 250,
+    height: 80,
+    marginBottom: Spacing.lg,
   },
   title: {
     textAlign: 'center',
