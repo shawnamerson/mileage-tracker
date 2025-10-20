@@ -22,12 +22,12 @@ create table public.profiles (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
 
-  -- Trial tracking
-  trial_started_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  trial_ends_at timestamp with time zone default (timezone('utc'::text, now()) + interval '30 days') not null,
+  -- Trial tracking (managed by Apple IAP, not database)
+  trial_started_at timestamp with time zone,
+  trial_ends_at timestamp with time zone,
 
-  -- Subscription status (will be managed by Apple IAP)
-  subscription_status text default 'trial' check (subscription_status in ('trial', 'active', 'expired', 'cancelled')),
+  -- Subscription status (managed by Apple IAP)
+  subscription_status text default 'none' check (subscription_status in ('none', 'trial', 'active', 'expired', 'cancelled')),
   subscription_expires_at timestamp with time zone,
   apple_transaction_id text
 );

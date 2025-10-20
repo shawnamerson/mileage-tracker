@@ -99,7 +99,7 @@ export default function SignUpScreen() {
               Create Account
             </ThemedText>
             <ThemedText style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Start your 30-day free trial
+              Get started with MileMate
             </ThemedText>
           </View>
 
@@ -192,17 +192,10 @@ export default function SignUpScreen() {
                 <ActivityIndicator color="#fff" />
               ) : (
                 <ThemedText style={[styles.buttonText, { color: colors.textInverse }]}>
-                  Start Free Trial
+                  Create Account
                 </ThemedText>
               )}
             </TouchableOpacity>
-
-            {/* Trial info */}
-            <View style={styles.trialInfo}>
-              <ThemedText style={[styles.trialText, { color: colors.textTertiary }]}>
-                30 days free, then subscription required. Cancel anytime.
-              </ThemedText>
-            </View>
 
             {/* Links */}
             <View style={styles.links}>

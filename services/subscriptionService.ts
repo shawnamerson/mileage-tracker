@@ -301,47 +301,43 @@ async function updateSupabaseSubscription(purchase: any): Promise<void> {
 
 /**
  * Check if user should see paywall
- * Returns true if trial expired and no active subscription
+ * Returns true if user doesn't have an active Apple subscription
  */
 export async function shouldShowPaywall(): Promise<boolean> {
   try {
-    // First check Apple for active subscription
+    // Check Apple for active subscription (including free trial)
     const hasActiveAppleSubscription = await hasActiveSubscription();
     if (hasActiveAppleSubscription) {
-      return false; // Has paid subscription, don't show paywall
+      console.log('[Apple IAP] User has active subscription, no paywall');
+      return false; // Has subscription or active trial, don't show paywall
     }
 
-    // Check Supabase profile for trial status
+    // Check Supabase profile for subscription status
     const user = await getCurrentUser();
     if (!user) {
+      console.log('[Apple IAP] No user, show paywall');
       return true; // Not logged in, show paywall
     }
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('trial_ends_at, subscription_status')
+      .select('subscription_status')
       .eq('id', user.id)
       .single();
 
     if (!profile) {
+      console.log('[Apple IAP] No profile, show paywall');
       return true; // No profile, show paywall
     }
 
-    // If has active subscription in Supabase
-    if (profile.subscription_status === 'active') {
+    // If has active or trial subscription in Supabase (synced from Apple)
+    if (profile.subscription_status === 'active' || profile.subscription_status === 'trial') {
+      console.log('[Apple IAP] Subscription status is active/trial, no paywall');
       return false;
     }
 
-    // Check if trial expired
-    const now = new Date();
-    const trialEnds = new Date(profile.trial_ends_at);
-
-    if (now > trialEnds) {
-      console.log('[Apple IAP] Trial expired, showing paywall');
-      return true; // Trial expired, show paywall
-    }
-
-    return false; // Still in trial
+    console.log('[Apple IAP] No active subscription, showing paywall');
+    return true; // No subscription, show paywall
   } catch (error) {
     console.error('[Apple IAP] Error checking if should show paywall:', error);
     return true; // On error, show paywall to be safe

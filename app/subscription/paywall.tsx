@@ -20,7 +20,6 @@ import {
   Product,
 } from '@/services/subscriptionService';
 import { useAuth } from '@/contexts/AuthContext';
-import { getTrialDaysRemaining } from '@/services/authService';
 
 export default function PaywallScreen() {
   const colors = useColors();
@@ -150,8 +149,6 @@ export default function PaywallScreen() {
     );
   }
 
-  const trialDaysRemaining = profile ? getTrialDaysRemaining(profile) : 0;
-  const isTrialExpired = trialDaysRemaining <= 0;
 
   return (
     <ScrollView
@@ -166,14 +163,11 @@ export default function PaywallScreen() {
           resizeMode="contain"
         />
         <ThemedText type="title" style={styles.title}>
-          {isTrialExpired ? 'Upgrade to Premium' : 'Your Trial is Ending Soon'}
+          Choose Your Plan
         </ThemedText>
-        {!isTrialExpired && (
-          <ThemedText style={[styles.subtitle, { color: colors.textSecondary }]}>
-            {trialDaysRemaining} day{trialDaysRemaining !== 1 ? 's' : ''} remaining in your free
-            trial
-          </ThemedText>
-        )}
+        <ThemedText style={[styles.subtitle, { color: colors.textSecondary }]}>
+          Start with a 30-day free trial
+        </ThemedText>
       </View>
 
       {/* Features */}
