@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
-  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -13,6 +12,7 @@ import { Link } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { LoadingAnimation } from '@/components/LoadingAnimation';
 import { useColors } from '@/constants/Design';
 import { signInWithApple, isAppleAuthAvailable } from '@/services/authService';
 
@@ -95,7 +95,7 @@ export default function SignInScreen() {
 
             {loading && (
               <View style={styles.loadingOverlay}>
-                <ActivityIndicator size="large" color={colors.primary} />
+                <LoadingAnimation text="Signing in..." size={50} />
               </View>
             )}
 

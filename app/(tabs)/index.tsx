@@ -9,12 +9,14 @@ import {
   getTripsByDateRange,
   Trip,
 } from '@/services/tripService';
+import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
 
 
 export default function DashboardScreen() {
   const colors = useColors();
+  const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [todayStats, setTodayStats] = useState({
@@ -28,33 +30,24 @@ export default function DashboardScreen() {
   const [todayDeductible, setTodayDeductible] = useState(0);
 
   const loadData = async () => {
-    try {
-      console.log('[Dashboard] Loading trip data...');
+    // Don't load if auth is still loading or user is not logged in
+    if (authLoading || !user) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
 
-      // Add timeout protection for Expo Go and slow connections
-      const dataPromise = Promise.all([
+    try {
+      const [todayStatsData, todayDeductibleData] = await Promise.all([
         getTripStatsForToday(),
         getBusinessDeductibleValueForToday(),
       ]);
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => {
-          console.log('[Dashboard] Data load timeout - using defaults');
-          reject(new Error('Timeout'));
-        }, 5000)
-      );
-
-      const [todayStatsData, todayDeductibleData] = await Promise.race([
-        dataPromise,
-        timeoutPromise,
-      ]);
-
-      console.log('[Dashboard] Data loaded successfully');
       setTodayStats(todayStatsData);
       setTodayDeductible(todayDeductibleData);
     } catch (error) {
       console.error('[Dashboard] Error loading data:', error);
-      // Use default values on timeout or error
+      // Use default values on error
       setTodayStats({
         totalTrips: 0,
         totalDistance: 0,
@@ -70,21 +63,30 @@ export default function DashboardScreen() {
     }
   };
 
+  // Only load data when auth is ready and user is logged in
   useEffect(() => {
-    loadData();
-  }, []);
+    if (!authLoading && user) {
+      loadData();
+    } else if (!authLoading && !user) {
+      // Auth completed but no user - set loading to false
+      setLoading(false);
+    }
+  }, [authLoading, user]);
 
   useFocusEffect(
     React.useCallback(() => {
-      loadData();
-
-      // Set up interval to auto-refresh dashboard data every 5 seconds
-      const interval = setInterval(() => {
+      // Only load and set up auto-refresh if user is logged in
+      if (!authLoading && user) {
         loadData();
-      }, 5000);
 
-      return () => clearInterval(interval);
-    }, [])
+        // Reduce auto-refresh frequency to every 30 seconds to avoid excessive queries
+        const interval = setInterval(() => {
+          loadData();
+        }, 30000);
+
+        return () => clearInterval(interval);
+      }
+    }, [authLoading, user])
   );
 
   const onRefresh = () => {

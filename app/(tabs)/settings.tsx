@@ -84,39 +84,28 @@ export default function SettingsScreen() {
     try {
       console.log('[Settings] Loading settings...');
 
-      // Add timeout protection for Expo Go and slow connections
-      const settingsPromise = (async () => {
-        const enabled = await isAutoTrackingEnabled();
-        const active = await isAutoTrackingActive();
-        const purpose = await getDefaultPurpose();
-        const notifEnabled = await areNotificationsEnabled();
-        const rates = await getAllRates();
+      const enabled = await isAutoTrackingEnabled();
+      const active = await isAutoTrackingActive();
+      const purpose = await getDefaultPurpose();
+      const notifEnabled = await areNotificationsEnabled();
+      const rates = await getAllRates();
 
-        setAutoTrackingEnabled(enabled);
-        setAutoTrackingActive(active);
-        setDefaultPurposeState(purpose);
-        setNotificationsEnabledState(notifEnabled);
-        setMileageRates(rates);
+      setAutoTrackingEnabled(enabled);
+      setAutoTrackingActive(active);
+      setDefaultPurposeState(purpose);
+      setNotificationsEnabledState(notifEnabled);
+      setMileageRates(rates);
 
-        // Initialize notifications on first load
-        await initializeNotifications();
+      // Initialize notifications on first load
+      await initializeNotifications();
 
-        // Load diagnostic info
-        await loadDiagnosticInfo();
-      })();
+      // Load diagnostic info
+      await loadDiagnosticInfo();
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => {
-          console.log('[Settings] Settings load timeout - using defaults');
-          reject(new Error('Timeout'));
-        }, 5000)
-      );
-
-      await Promise.race([settingsPromise, timeoutPromise]);
       console.log('[Settings] Settings loaded successfully');
     } catch (error) {
       console.error('[Settings] Error loading settings:', error);
-      // Use default values on timeout or error
+      // Use default values on error
       setAutoTrackingEnabled(false);
       setAutoTrackingActive(false);
       setDefaultPurposeState('business');
@@ -146,7 +135,10 @@ export default function SettingsScreen() {
   };
 
   const handleToggleAutoTracking = async (value: boolean) => {
-    setLoading(true);
+    // Don't set loading=true here to allow the switch to respond immediately
+    // Update the UI state optimistically
+    setAutoTrackingEnabled(value);
+
     try {
       if (value) {
         const started = await startAutoTracking();
@@ -158,6 +150,9 @@ export default function SettingsScreen() {
             'The app will now automatically detect and track your trips. Drive detection starts at 5+ mph and trips end after 3 minutes of being stationary.'
           );
         } else {
+          // Revert if permission denied
+          setAutoTrackingEnabled(false);
+          setAutoTrackingActive(false);
           Alert.alert(
             'Permission Required',
             'Background location access is required for automatic trip tracking. Please grant permission in your device settings.'
@@ -171,9 +166,10 @@ export default function SettingsScreen() {
       }
     } catch (error) {
       console.error('Error toggling auto-tracking:', error);
+      // Revert state on error
+      setAutoTrackingEnabled(!value);
+      setAutoTrackingActive(false);
       Alert.alert('Error', 'Failed to toggle auto-tracking');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -435,7 +431,6 @@ export default function SettingsScreen() {
           <Switch
             value={autoTrackingEnabled}
             onValueChange={handleToggleAutoTracking}
-            disabled={loading}
           />
         </ThemedView>
 
@@ -544,7 +539,6 @@ export default function SettingsScreen() {
             <Switch
               value={notificationsEnabled}
               onValueChange={handleToggleNotifications}
-              disabled={loading}
             />
           </ThemedView>
         )}

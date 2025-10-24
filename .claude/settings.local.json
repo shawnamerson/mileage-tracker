@@ -1,12 +1,27 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git add supabase-migration-apple-iap.sql)",
-      "Bash(git commit -m \"Add database migration for Apple IAP-only trial system\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\")",
-      "Bash(git add supabase-migration-add-vehicles.sql services/vehicleService.ts services/tripService.ts)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nMigrate to Supabase cloud storage for proper user isolation\n\nStorage Migration:\n- Added vehicles table to Supabase with proper RLS\n- Migrated vehicleService.ts from AsyncStorage to Supabase\n- Migrated tripService.ts from SQLite to Supabase\n- All data now properly scoped by user_id\n\nVehicles Table:\n- Stores vehicle info in cloud (name, make, model, year)\n- Tracks mileage (initial_mileage, current_mileage)  \n- Supports Bluetooth integration\n- is_active flag for active vehicle selection\n- Full RLS policies for user isolation\n\nTrips Integration:\n- Trips now use Supabase exclusively\n- Changed ID from number to UUID (string)\n- All queries filtered by user_id\n- Maintains soft delete functionality\n\nBenefits:\n- ✅ Proper user data isolation\n- ✅ Multi-device sync\n- ✅ Cloud backup\n- ✅ No more shared local storage\n- ✅ Data persists across app reinstalls\n\nMigration Required:\n- Run supabase-migration-add-vehicles.sql in Supabase SQL Editor\n- Existing local data will not be migrated (fresh start)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(git commit -m \"Increase wordmark size across all screens\n\n- Sign-in/Sign-up: 250x80 → 320x110\n- Onboarding: 280x100 → 350x120\n- Paywall: 250x80 → 320x110\n- Makes branding more prominent and visible\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\")",
-      "Bash(git commit -m \"$(cat <<''EOF''\nImplement Sign in with Apple authentication\n\nAuthentication Changes:\n- Replace email/password authentication with Sign in with Apple\n- Install expo-apple-authentication package\n- Add signInWithApple() and isAppleAuthAvailable() to authService\n- Apple handles both new and existing users automatically\n\nUI Updates:\n- Sign-in screen: Native Apple Sign In button\n- Sign-up screen: Native Apple Sign In button\n- Remove all email/password forms and validation\n- Simplified, cleaner authentication flow\n\nConfiguration:\n- Enable usesAppleSignIn in app.json iOS config\n- Apple Sign In capability will be added during build\n\nBenefits:\n- ✅ One-tap authentication\n- ✅ No passwords to remember\n- ✅ Apple-verified users (no fake emails)\n- ✅ Privacy-focused (hide email option)\n- ✅ More secure than email/password\n- ✅ Native iOS experience\n- ✅ Faster onboarding\n\nSupabase Configuration Required:\n- Enable Apple provider in Supabase Dashboard\n- Configure Service ID and key in Supabase\n- Instructions in APPLE_SIGNIN_SETUP.md (to be added)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
+      "Bash(nc:*)",
+      "Bash(open -a Simulator)",
+      "Bash(npx expo run:ios)",
+      "Bash(npx expo start)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)",
+      "Bash(npx expo start --clear)",
+      "Bash(npx tsc:*)",
+      "Bash(npx expo-doctor)",
+      "Bash(npx expo install:*)",
+      "Bash(npx expo start --tunnel --go)",
+      "Bash(npx expo start:*)",
+      "Bash(npm start)",
+      "Bash(curl:*)",
+      "Bash(xcrun simctl:*)",
+      "Bash(xcodebuild:*)",
+      "Bash(npx expo:*)",
+      "Read(//Users/shawnamerson/Library/Developer/Xcode/DerivedData/**)",
+      "Bash(pkill:*)",
+      "Bash(open:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

@@ -2,7 +2,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -11,6 +11,7 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { shouldShowPaywall, initializeIAP, cleanupIAP } from '@/services/subscriptionService';
 import { initializeSync } from '@/services/syncService';
 import { isAutoTrackingEnabled, isAutoTrackingActive, startAutoTracking } from '@/services/autoTracking';
+import { LoadingAnimation } from '@/components/LoadingAnimation';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -192,7 +193,7 @@ function RootNavigator() {
   if (!isReady || loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <LoadingAnimation text="Loading MileMate..." />
       </View>
     );
   }

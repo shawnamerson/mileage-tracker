@@ -2,28 +2,11 @@ import { supabase } from './supabase';
 import { getCurrentUser } from './authService';
 import { getRateForYear } from './mileageRateService';
 import { getActiveVehicle, updateVehicleMileage } from './vehicleService';
-import { markTripDeleted, addToQueue } from './syncService';
+import { Trip } from './tripTypes';
+import { addToQueue } from './offlineQueue';
 
-// Trip interface - stored in Supabase
-export interface Trip {
-  id?: string;
-  user_id?: string;
-  start_location: string;
-  end_location: string;
-  start_latitude: number;
-  start_longitude: number;
-  end_latitude: number;
-  end_longitude: number;
-  distance: number; // in miles
-  start_time: number; // timestamp in milliseconds
-  end_time: number; // timestamp in milliseconds
-  purpose: 'business' | 'personal' | 'medical' | 'charity' | 'other';
-  notes?: string;
-  created_at?: string;
-  updated_at?: string;
-  is_deleted?: boolean;
-  deleted_at?: string;
-}
+// Re-export Trip type for backward compatibility
+export type { Trip };
 
 /**
  * Validates trip data before saving
@@ -354,10 +337,11 @@ export async function deleteTrip(id: string): Promise<void> {
     if (error) {
       console.error('[Trip Delete] Error deleting from Supabase:', error);
 
-      // If delete failed, use the sync service with offline queue support
+      // If delete failed, add to offline queue for retry
       // This will retry automatically when back online
       console.log('[Trip Delete] Using offline queue for deletion');
-      await markTripDeleted(trip);
+
+      await addToQueue('delete', trip);
 
       // Even though Supabase failed, we consider this successful
       // because it's queued for retry

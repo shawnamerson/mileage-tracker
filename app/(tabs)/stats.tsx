@@ -2,13 +2,13 @@ import React, { useEffect, useState } from 'react';
 import {
   StyleSheet,
   ScrollView,
-  ActivityIndicator,
   RefreshControl,
   TouchableOpacity,
   Alert,
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { LoadingAnimation } from '@/components/LoadingAnimation';
 import {
   getTripStats,
   getAllTrips,
@@ -73,25 +73,6 @@ export default function StatsScreen() {
 
       const currentYear = new Date().getFullYear();
 
-      // Add timeout protection for Expo Go and slow connections
-      const dataPromise = Promise.all([
-        getTripStats(),
-        getTripStatsForToday(),
-        getTripStatsForCurrentMonth(),
-        getTripStatsForYear(currentYear),
-        getBusinessDeductibleValueForToday(),
-        getBusinessDeductibleValueForCurrentMonth(),
-        getBusinessDeductibleValueForYear(currentYear),
-        getActiveVehicle()
-      ]);
-
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => {
-          console.log('[Stats] Data load timeout - using defaults');
-          reject(new Error('Timeout'));
-        }, 5000)
-      );
-
       const [
         tripStats,
         todayStatsData,
@@ -101,7 +82,16 @@ export default function StatsScreen() {
         monthDeductibleData,
         yearDeductibleData,
         activeVehicle
-      ] = await Promise.race([dataPromise, timeoutPromise]);
+      ] = await Promise.all([
+        getTripStats(),
+        getTripStatsForToday(),
+        getTripStatsForCurrentMonth(),
+        getTripStatsForYear(currentYear),
+        getBusinessDeductibleValueForToday(),
+        getBusinessDeductibleValueForCurrentMonth(),
+        getBusinessDeductibleValueForYear(currentYear),
+        getActiveVehicle()
+      ]);
 
       setStats(tripStats);
       setTodayStats(todayStatsData);
@@ -117,7 +107,7 @@ export default function StatsScreen() {
       console.error('[Stats] Error loading stats:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       setError(errorMessage);
-      // Use default values on timeout or error
+      // Use default values on error
       const defaultStats = {
         totalTrips: 0,
         totalDistance: 0,
@@ -218,7 +208,7 @@ export default function StatsScreen() {
   if (loading) {
     return (
       <ThemedView style={styles.container}>
-        <ActivityIndicator size="large" />
+        <LoadingAnimation text="Loading statistics..." />
       </ThemedView>
     );
   }

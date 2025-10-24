@@ -1,37 +1,25 @@
 import { supabase, CloudTrip } from './supabase';
-import { getAllTrips, Trip } from './tripService';
+import { Trip } from './tripTypes';
 import { getCurrentUser } from './authService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  getQueue,
+  saveQueue,
+  addToQueue,
+  getQueueStatus,
+  clearFailedOperations,
+  SyncErrorType,
+  type SyncError,
+  type QueuedOperation,
+} from './offlineQueue';
 
 const LAST_SYNC_KEY = 'last_sync_timestamp';
-const SYNC_QUEUE_KEY = 'sync_queue';
 const MAX_RETRY_ATTEMPTS = 3;
 const INITIAL_RETRY_DELAY = 1000; // 1 second
 
-// Error types for better categorization
-export enum SyncErrorType {
-  NETWORK = 'network',
-  SERVER = 'server',
-  VALIDATION = 'validation',
-  AUTH = 'auth',
-  UNKNOWN = 'unknown',
-}
-
-export interface SyncError {
-  type: SyncErrorType;
-  message: string;
-  retryable: boolean;
-}
-
-// Offline queue item
-export interface QueuedOperation {
-  id: string;
-  type: 'upload' | 'delete' | 'create';
-  trip: Trip;
-  attempts: number;
-  lastAttempt?: number;
-  error?: SyncError;
-}
+// Re-export for backward compatibility
+export { SyncErrorType, addToQueue, getQueueStatus, clearFailedOperations };
+export type { SyncError, QueuedOperation };
 
 /**
  * Convert local trip to cloud format (they're now the same)
@@ -151,52 +139,6 @@ function categorizeError(error: any): SyncError {
   };
 }
 
-/**
- * Get offline queue from storage
- */
-async function getQueue(): Promise<QueuedOperation[]> {
-  try {
-    const queueJson = await AsyncStorage.getItem(SYNC_QUEUE_KEY);
-    return queueJson ? JSON.parse(queueJson) : [];
-  } catch (error) {
-    console.error('[Sync Queue] Error loading queue:', error);
-    return [];
-  }
-}
-
-/**
- * Save offline queue to storage
- */
-async function saveQueue(queue: QueuedOperation[]): Promise<void> {
-  try {
-    await AsyncStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue));
-  } catch (error) {
-    console.error('[Sync Queue] Error saving queue:', error);
-  }
-}
-
-/**
- * Add operation to offline queue
- */
-export async function addToQueue(
-  type: 'upload' | 'delete' | 'create',
-  trip: Trip
-): Promise<void> {
-  try {
-    const queue = await getQueue();
-    const operation: QueuedOperation = {
-      id: `${type}_${trip.id}_${Date.now()}`,
-      type,
-      trip,
-      attempts: 0,
-    };
-    queue.push(operation);
-    await saveQueue(queue);
-    console.log(`[Sync Queue] Added ${type} operation for trip ${trip.id}`);
-  } catch (error) {
-    console.error('[Sync Queue] Error adding to queue:', error);
-  }
-}
 
 /**
  * Process offline queue with retry logic
@@ -302,34 +244,6 @@ export async function processQueue(): Promise<{
   }
 }
 
-/**
- * Get queue status
- */
-export async function getQueueStatus(): Promise<{
-  total: number;
-  pending: number;
-  failed: number;
-}> {
-  const queue = await getQueue();
-  const pending = queue.filter((op) => op.attempts < MAX_RETRY_ATTEMPTS).length;
-  const failed = queue.filter((op) => op.attempts >= MAX_RETRY_ATTEMPTS).length;
-
-  return {
-    total: queue.length,
-    pending,
-    failed,
-  };
-}
-
-/**
- * Clear all failed operations from queue
- */
-export async function clearFailedOperations(): Promise<void> {
-  const queue = await getQueue();
-  const remaining = queue.filter((op) => op.attempts < MAX_RETRY_ATTEMPTS);
-  await saveQueue(remaining);
-  console.log('[Sync Queue] Cleared failed operations');
-}
 
 /**
  * Upload a trip to Supabase with conflict resolution
@@ -460,16 +374,35 @@ export async function createTripInCloud(trip: Trip, addToQueueOnFailure = true):
  */
 export async function uploadAllTrips(): Promise<{ success: number; failed: number }> {
   try {
-    const trips = await getAllTrips();
+    // Get trips directly from Supabase to avoid circular dependency
+    const user = await getCurrentUser();
+    if (!user) {
+      console.error('[Sync] No user logged in');
+      return { success: 0, failed: 0 };
+    }
+
+    const { data: trips, error } = await supabase
+      .from('trips')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('is_deleted', false)
+      .order('start_time', { ascending: false });
+
+    if (error) {
+      console.error('[Sync] Error fetching trips:', error);
+      return { success: 0, failed: 0 };
+    }
+
+    const tripList = (trips || []).map(cloudTripToTrip);
     let success = 0;
     let failed = 0;
 
-    console.log(`[Sync] Uploading ${trips.length} local trips to cloud...`);
+    console.log(`[Sync] Uploading ${tripList.length} local trips to cloud...`);
 
     // Upload trips in parallel for better performance (batch of 5 at a time)
     const batchSize = 5;
-    for (let i = 0; i < trips.length; i += batchSize) {
-      const batch = trips.slice(i, i + batchSize);
+    for (let i = 0; i < tripList.length; i += batchSize) {
+      const batch = tripList.slice(i, i + batchSize);
       const results = await Promise.allSettled(
         batch.map((trip) => uploadTrip(trip))
       );

@@ -5,12 +5,12 @@ import {
   TouchableOpacity,
   Alert,
   RefreshControl,
-  ActivityIndicator,
   Modal,
   TextInput,
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { LoadingAnimation } from '@/components/LoadingAnimation';
 import { getAllTrips, deleteTrip, updateTrip, Trip } from '@/services/tripService';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
@@ -31,22 +31,12 @@ export default function HistoryScreen() {
   const loadTrips = async () => {
     try {
       console.log('[History] Loading trips...');
-
-      // Add timeout protection for Expo Go and slow connections
-      const tripsPromise = getAllTrips();
-      const timeoutPromise = new Promise<Trip[]>((_, reject) =>
-        setTimeout(() => {
-          console.log('[History] Trip load timeout - using empty list');
-          reject(new Error('Timeout'));
-        }, 5000)
-      );
-
-      const allTrips = await Promise.race([tripsPromise, timeoutPromise]);
+      const allTrips = await getAllTrips();
       console.log('[History] Loaded', allTrips.length, 'trips');
       setTrips(allTrips);
     } catch (error) {
       console.error('[History] Error loading trips:', error);
-      // Use empty array on timeout or error
+      // Use empty array on error
       setTrips([]);
     } finally {
       setLoading(false);
@@ -120,7 +110,7 @@ export default function HistoryScreen() {
   if (loading) {
     return (
       <ThemedView style={styles.container}>
-        <ActivityIndicator size="large" />
+        <LoadingAnimation text="Loading your trips..." />
       </ThemedView>
     );
   }
