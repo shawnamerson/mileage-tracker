@@ -11,8 +11,7 @@ import {
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { getAllTrips, deleteTrip, updateTrip } from '@/services/tripService';
-import { Trip } from '@/services/database';
+import { getAllTrips, deleteTrip, updateTrip, Trip } from '@/services/tripService';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
 
@@ -31,10 +30,24 @@ export default function HistoryScreen() {
 
   const loadTrips = async () => {
     try {
-      const allTrips = await getAllTrips();
+      console.log('[History] Loading trips...');
+
+      // Add timeout protection for Expo Go and slow connections
+      const tripsPromise = getAllTrips();
+      const timeoutPromise = new Promise<Trip[]>((_, reject) =>
+        setTimeout(() => {
+          console.log('[History] Trip load timeout - using empty list');
+          reject(new Error('Timeout'));
+        }, 5000)
+      );
+
+      const allTrips = await Promise.race([tripsPromise, timeoutPromise]);
+      console.log('[History] Loaded', allTrips.length, 'trips');
       setTrips(allTrips);
     } catch (error) {
-      console.error('Error loading trips:', error);
+      console.error('[History] Error loading trips:', error);
+      // Use empty array on timeout or error
+      setTrips([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -80,7 +93,7 @@ export default function HistoryScreen() {
     }
   };
 
-  const handleDeleteTrip = (id: number) => {
+  const handleDeleteTrip = (id: string) => {
     Alert.alert('Delete Trip', 'Are you sure you want to delete this trip?', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -175,6 +188,7 @@ export default function HistoryScreen() {
       <ScrollView
         style={styles.scrollView}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        showsVerticalScrollIndicator={false}
       >
         {filteredTrips.length === 0 ? (
           <ThemedView style={[styles.emptyState, { backgroundColor: colors.surface }]}>
@@ -189,11 +203,11 @@ export default function HistoryScreen() {
               <ThemedView style={styles.tripHeader}>
                 <ThemedView style={styles.tripInfo}>
                   <ThemedText type="defaultSemiBold" numberOfLines={1} ellipsizeMode="tail">
-                    {trip.startLocation}
+                    {trip.start_location}
                   </ThemedText>
                   <ThemedText style={styles.arrow}>→</ThemedText>
                   <ThemedText type="defaultSemiBold" numberOfLines={1} ellipsizeMode="tail">
-                    {trip.endLocation}
+                    {trip.end_location}
                   </ThemedText>
                 </ThemedView>
                 <ThemedText style={styles.tripDistance}>{trip.distance.toFixed(1)} mi</ThemedText>
@@ -203,18 +217,18 @@ export default function HistoryScreen() {
                 <ThemedView style={styles.detailRow}>
                   <ThemedText style={styles.detailLabel}>Date:</ThemedText>
                   <ThemedText style={styles.detailValue}>
-                    {new Date(trip.startTime).toLocaleDateString()}
+                    {new Date(trip.start_time).toLocaleDateString()}
                   </ThemedText>
                 </ThemedView>
                 <ThemedView style={styles.detailRow}>
                   <ThemedText style={styles.detailLabel}>Time:</ThemedText>
                   <ThemedText style={styles.detailValue}>
-                    {new Date(trip.startTime).toLocaleTimeString([], {
+                    {new Date(trip.start_time).toLocaleTimeString([], {
                       hour: '2-digit',
                       minute: '2-digit',
                     })}{' '}
                     -{' '}
-                    {new Date(trip.endTime).toLocaleTimeString([], {
+                    {new Date(trip.end_time).toLocaleTimeString([], {
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
@@ -273,7 +287,7 @@ export default function HistoryScreen() {
                 <ThemedView style={styles.modalSection}>
                   <ThemedText style={[styles.modalLabel, { color: colors.textSecondary }]}>Route:</ThemedText>
                   <ThemedText style={[styles.modalRouteText, { color: colors.text }]}>
-                    {editingTrip.startLocation} → {editingTrip.endLocation}
+                    {editingTrip.start_location} → {editingTrip.end_location}
                   </ThemedText>
                 </ThemedView>
 

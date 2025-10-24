@@ -9,17 +9,27 @@ import {
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { getTripStats, getMonthlyStats, getAllTrips } from '@/services/tripService';
+import {
+  getTripStats,
+  getAllTrips,
+  getTripStatsForToday,
+  getTripStatsForCurrentMonth,
+  getTripStatsForYear,
+  getBusinessDeductibleValueForToday,
+  getBusinessDeductibleValueForCurrentMonth,
+  getBusinessDeductibleValueForYear
+} from '@/services/tripService';
 import { getActiveVehicle, type Vehicle } from '@/services/vehicleService';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Sharing from 'expo-sharing';
 import { Paths, File } from 'expo-file-system';
-import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
+import { Colors, useColors, Spacing, BorderRadius, Typography } from '@/constants/Design';
 
 export default function StatsScreen() {
   const colors = useColors();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState({
     totalTrips: 0,
     totalDistance: 0,
@@ -28,25 +38,102 @@ export default function StatsScreen() {
     businessDistance: 0,
     personalDistance: 0,
   });
-  const [currentMonthStats, setCurrentMonthStats] = useState({
-    trips: 0,
-    distance: 0,
+  const [todayStats, setTodayStats] = useState({
+    totalTrips: 0,
+    totalDistance: 0,
+    businessTrips: 0,
+    personalTrips: 0,
     businessDistance: 0,
+    personalDistance: 0,
   });
+  const [monthStats, setMonthStats] = useState({
+    totalTrips: 0,
+    totalDistance: 0,
+    businessTrips: 0,
+    personalTrips: 0,
+    businessDistance: 0,
+    personalDistance: 0,
+  });
+  const [yearStats, setYearStats] = useState({
+    totalTrips: 0,
+    totalDistance: 0,
+    businessTrips: 0,
+    personalTrips: 0,
+    businessDistance: 0,
+    personalDistance: 0,
+  });
+  const [todayDeductible, setTodayDeductible] = useState(0);
+  const [monthDeductible, setMonthDeductible] = useState(0);
+  const [yearDeductible, setYearDeductible] = useState(0);
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
 
   const loadData = async () => {
     try {
-      const tripStats = await getTripStats();
-      const now = new Date();
-      const monthStats = await getMonthlyStats(now.getFullYear(), now.getMonth() + 1);
-      const activeVehicle = await getActiveVehicle();
+      console.log('[Stats] Starting to load data...');
+
+      const currentYear = new Date().getFullYear();
+
+      // Add timeout protection for Expo Go and slow connections
+      const dataPromise = Promise.all([
+        getTripStats(),
+        getTripStatsForToday(),
+        getTripStatsForCurrentMonth(),
+        getTripStatsForYear(currentYear),
+        getBusinessDeductibleValueForToday(),
+        getBusinessDeductibleValueForCurrentMonth(),
+        getBusinessDeductibleValueForYear(currentYear),
+        getActiveVehicle()
+      ]);
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          console.log('[Stats] Data load timeout - using defaults');
+          reject(new Error('Timeout'));
+        }, 5000)
+      );
+
+      const [
+        tripStats,
+        todayStatsData,
+        monthStatsData,
+        yearStatsData,
+        todayDeductibleData,
+        monthDeductibleData,
+        yearDeductibleData,
+        activeVehicle
+      ] = await Promise.race([dataPromise, timeoutPromise]);
 
       setStats(tripStats);
-      setCurrentMonthStats(monthStats);
+      setTodayStats(todayStatsData);
+      setMonthStats(monthStatsData);
+      setYearStats(yearStatsData);
+      setTodayDeductible(todayDeductibleData);
+      setMonthDeductible(monthDeductibleData);
+      setYearDeductible(yearDeductibleData);
       setVehicle(activeVehicle);
+      setError(null);
+      console.log('[Stats] Data loaded successfully');
     } catch (error) {
-      console.error('Error loading stats:', error);
+      console.error('[Stats] Error loading stats:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setError(errorMessage);
+      // Use default values on timeout or error
+      const defaultStats = {
+        totalTrips: 0,
+        totalDistance: 0,
+        businessTrips: 0,
+        personalTrips: 0,
+        businessDistance: 0,
+        personalDistance: 0,
+      };
+      setStats(defaultStats);
+      setTodayStats(defaultStats);
+      setMonthStats(defaultStats);
+      setYearStats(defaultStats);
+      setTodayDeductible(0);
+      setMonthDeductible(0);
+      setYearDeductible(0);
+      setVehicle(null);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -81,8 +168,8 @@ export default function StatsScreen() {
       const csvRows = trips
         .map(
           (trip) =>
-            `"${new Date(trip.startTime).toLocaleDateString()}","${trip.startLocation}","${
-              trip.endLocation
+            `"${new Date(trip.start_time).toLocaleDateString()}","${trip.start_location}","${
+              trip.end_location
             }","${trip.distance}","${trip.purpose}","${trip.notes || ''}"`
         )
         .join('\n');
@@ -95,7 +182,11 @@ export default function StatsScreen() {
 
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
-        await Sharing.shareAsync(file.uri);
+        await Sharing.shareAsync(file.uri, {
+          mimeType: 'text/csv',
+          dialogTitle: 'Export Mileage Report',
+        });
+        Alert.alert('Success', 'Report exported successfully');
       } else {
         Alert.alert('Success', `Report saved to ${file.uri}`);
       }
@@ -104,6 +195,25 @@ export default function StatsScreen() {
       Alert.alert('Error', 'Failed to export report');
     }
   };
+
+  if (error) {
+    return (
+      <ThemedView style={[styles.container, { backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }]}>
+        <ThemedText style={{ color: colors.error, marginBottom: 16 }}>Error Loading Stats</ThemedText>
+        <ThemedText style={{ color: colors.textSecondary, textAlign: 'center', paddingHorizontal: 20 }}>{error}</ThemedText>
+        <TouchableOpacity
+          style={{ marginTop: 20, padding: 12, backgroundColor: colors.primary, borderRadius: 8 }}
+          onPress={() => {
+            setError(null);
+            setLoading(true);
+            loadData();
+          }}
+        >
+          <ThemedText style={{ color: colors.textInverse }}>Retry</ThemedText>
+        </TouchableOpacity>
+      </ThemedView>
+    );
+  }
 
   if (loading) {
     return (
@@ -122,6 +232,7 @@ export default function StatsScreen() {
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      showsVerticalScrollIndicator={false}
     >
       <ThemedView style={styles.header}>
         <ThemedText type="title">Statistics</ThemedText>
@@ -137,76 +248,126 @@ export default function StatsScreen() {
             <ThemedView style={styles.vehicleStat}>
               <ThemedText style={[styles.vehicleStatLabel, { color: colors.textSecondary }]}>Current Odometer</ThemedText>
               <ThemedText style={[styles.vehicleStatValue, { color: colors.primary }]}>
-                {vehicle.currentMileage.toLocaleString()} mi
+                {vehicle.current_mileage.toLocaleString()} mi
               </ThemedText>
             </ThemedView>
             <ThemedView style={styles.vehicleStat}>
               <ThemedText style={[styles.vehicleStatLabel, { color: colors.textSecondary }]}>Tracked Since</ThemedText>
               <ThemedText style={[styles.vehicleStatValue, { color: colors.primary }]}>
-                {vehicle.initialMileage.toLocaleString()} mi
+                {vehicle.initial_mileage.toLocaleString()} mi
               </ThemedText>
             </ThemedView>
             <ThemedView style={styles.vehicleStat}>
               <ThemedText style={[styles.vehicleStatLabel, { color: colors.textSecondary }]}>Miles Tracked</ThemedText>
               <ThemedText style={[styles.vehicleStatValue, { color: colors.primary }]}>
-                {(vehicle.currentMileage - vehicle.initialMileage).toLocaleString()} mi
+                {(vehicle.current_mileage - vehicle.initial_mileage).toLocaleString()} mi
               </ThemedText>
             </ThemedView>
           </ThemedView>
         </ThemedView>
       )}
 
-      <ThemedView style={styles.section}>
-        <ThemedText type="subtitle" style={styles.sectionTitle}>
-          Overall Statistics
-        </ThemedText>
+      {/* Today Card */}
+      <ThemedView style={[styles.periodCard, { backgroundColor: colors.surface }]}>
+        <ThemedText type="subtitle" style={styles.periodTitle}>Today</ThemedText>
 
-        <ThemedView style={styles.statGrid}>
-          <ThemedView style={[styles.statBox, { backgroundColor: colors.surface }]}>
-            <ThemedText style={[styles.statNumber, { color: colors.primary }]}>{stats.totalTrips}</ThemedText>
-            <ThemedText style={[styles.statLabel, { color: colors.textSecondary }]}>Total Trips</ThemedText>
+        <ThemedView style={[styles.metricsRow, { backgroundColor: 'transparent' }]}>
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.success }]}>
+              {todayStats.totalTrips}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Trips</ThemedText>
           </ThemedView>
 
-          <ThemedView style={[styles.statBox, { backgroundColor: colors.surface }]}>
-            <ThemedText style={[styles.statNumber, { color: colors.primary }]}>{stats.totalDistance.toFixed(1)}</ThemedText>
-            <ThemedText style={[styles.statLabel, { color: colors.textSecondary }]}>Total Miles</ThemedText>
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.success }]}>
+              {todayStats.totalDistance.toFixed(1)}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Miles</ThemedText>
           </ThemedView>
 
-          <ThemedView style={[styles.statBox, { backgroundColor: colors.surface }]}>
-            <ThemedText style={[styles.statNumber, { color: colors.primary }]}>{stats.businessTrips}</ThemedText>
-            <ThemedText style={[styles.statLabel, { color: colors.textSecondary }]}>Business Trips</ThemedText>
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.success }]}>
+              {todayStats.businessTrips}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Business</ThemedText>
           </ThemedView>
 
-          <ThemedView style={[styles.statBox, { backgroundColor: colors.surface }]}>
-            <ThemedText style={[styles.statNumber, { color: colors.primary }]}>{stats.personalTrips}</ThemedText>
-            <ThemedText style={[styles.statLabel, { color: colors.textSecondary }]}>Personal Trips</ThemedText>
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.accent }]}>
+              ${todayDeductible.toFixed(2)}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Deductible</ThemedText>
           </ThemedView>
         </ThemedView>
       </ThemedView>
 
-      <ThemedView style={styles.section}>
-        <ThemedText type="subtitle" style={styles.sectionTitle}>
-          This Month
-        </ThemedText>
+      {/* MTD Card */}
+      <ThemedView style={[styles.periodCard, { backgroundColor: colors.surface }]}>
+        <ThemedText type="subtitle" style={styles.periodTitle}>Month-to-Date</ThemedText>
 
-        <ThemedView style={[styles.monthCard, { backgroundColor: colors.surface }]}>
-          <ThemedView style={styles.monthStat}>
-            <ThemedText style={[styles.monthNumber, { color: colors.success }]}>{currentMonthStats.trips}</ThemedText>
-            <ThemedText style={[styles.monthLabel, { color: colors.textSecondary }]}>Trips</ThemedText>
+        <ThemedView style={[styles.metricsRow, { backgroundColor: 'transparent' }]}>
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.primary }]}>
+              {monthStats.totalTrips}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Trips</ThemedText>
           </ThemedView>
 
-          <ThemedView style={styles.monthStat}>
-            <ThemedText style={[styles.monthNumber, { color: colors.success }]}>
-              {currentMonthStats.distance.toFixed(1)}
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.primary }]}>
+              {monthStats.totalDistance.toFixed(1)}
             </ThemedText>
-            <ThemedText style={[styles.monthLabel, { color: colors.textSecondary }]}>Total Miles</ThemedText>
+            <ThemedText style={styles.metricLabel}>Miles</ThemedText>
           </ThemedView>
 
-          <ThemedView style={styles.monthStat}>
-            <ThemedText style={[styles.monthNumber, { color: colors.success }]}>
-              {currentMonthStats.businessDistance.toFixed(1)}
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.primary }]}>
+              {monthStats.businessTrips}
             </ThemedText>
-            <ThemedText style={[styles.monthLabel, { color: colors.textSecondary }]}>Business Miles</ThemedText>
+            <ThemedText style={styles.metricLabel}>Business</ThemedText>
+          </ThemedView>
+
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.accent }]}>
+              ${monthDeductible.toFixed(2)}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Deductible</ThemedText>
+          </ThemedView>
+        </ThemedView>
+      </ThemedView>
+
+      {/* YTD Card */}
+      <ThemedView style={[styles.periodCard, { backgroundColor: colors.surface }]}>
+        <ThemedText type="subtitle" style={styles.periodTitle}>Year-to-Date</ThemedText>
+
+        <ThemedView style={[styles.metricsRow, { backgroundColor: 'transparent' }]}>
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: '#A78BFA' }]}>
+              {yearStats.totalTrips}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Trips</ThemedText>
+          </ThemedView>
+
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: '#A78BFA' }]}>
+              {yearStats.totalDistance.toFixed(1)}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Miles</ThemedText>
+          </ThemedView>
+
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: '#A78BFA' }]}>
+              {yearStats.businessTrips}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Business</ThemedText>
+          </ThemedView>
+
+          <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.accent }]}>
+              ${yearDeductible.toFixed(2)}
+            </ThemedText>
+            <ThemedText style={styles.metricLabel}>Deductible</ThemedText>
           </ThemedView>
         </ThemedView>
       </ThemedView>
@@ -279,62 +440,53 @@ const styles = StyleSheet.create({
   sectionTitle: {
     marginBottom: Spacing.md,
   },
-  statGrid: {
+  periodCard: {
+    padding: Spacing.xl,
+    borderRadius: BorderRadius.xl,
+    marginBottom: Spacing.lg,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  periodTitle: {
+    marginBottom: Spacing.lg,
+    color: Colors.text,
+    textAlign: 'center',
+  },
+  metricsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: Spacing.md,
+    justifyContent: 'space-between',
   },
-  statBox: {
-    flex: 1,
-    minWidth: '45%',
-    padding: Spacing.lg,
-    borderRadius: BorderRadius.lg,
-    backgroundColor: Colors.surface,
+  metricItem: {
+    width: '47%',
     alignItems: 'center',
-    justifyContent: 'center',
-    ...Shadows.lg,
+    marginBottom: Spacing.lg,
   },
-  statNumber: {
+  metricValue: {
     fontSize: Typography['2xl'],
     fontWeight: Typography.bold,
     color: Colors.primary,
-    textAlign: 'center',
-    flexShrink: 1,
   },
-  statLabel: {
+  metricLabel: {
     marginTop: Spacing.xs,
     fontSize: Typography.sm,
     color: Colors.textSecondary,
     fontWeight: Typography.medium,
-  },
-  monthCard: {
-    flexDirection: 'row',
-    padding: Spacing.xl,
-    borderRadius: BorderRadius.xl,
-    backgroundColor: Colors.surface,
-    justifyContent: 'space-around',
-    ...Shadows.lg,
-  },
-  monthStat: {
-    alignItems: 'center',
-  },
-  monthNumber: {
-    fontSize: Typography['2xl'],
-    fontWeight: Typography.bold,
-    color: Colors.success,
-  },
-  monthLabel: {
-    marginTop: Spacing.xs,
-    fontSize: Typography.xs,
-    color: Colors.textSecondary,
-    fontWeight: Typography.medium,
+    textAlign: 'center',
   },
   breakdownCard: {
     padding: Spacing.xl,
     borderRadius: BorderRadius.xl,
     backgroundColor: Colors.surface,
     gap: Spacing.lg,
-    ...Shadows.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 4,
   },
   breakdownRow: {
     gap: Spacing.sm,
@@ -368,7 +520,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderRadius: BorderRadius.lg,
     alignItems: 'center',
-    ...Shadows.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 4,
   },
   exportButtonText: {
     color: Colors.textInverse,
@@ -380,7 +536,11 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.xl,
     backgroundColor: Colors.surface,
     marginBottom: Spacing.lg,
-    ...Shadows.lg,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 6,
   },
   vehicleTitle: {
     marginBottom: Spacing.md,

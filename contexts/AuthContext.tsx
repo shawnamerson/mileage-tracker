@@ -60,22 +60,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Initialize auth state
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-
-      if (session?.user) {
-        await fetchProfile(session.user.id);
-
-        // Initialize sync when user logs in
-        initializeSync().catch((error: Error) => {
-          console.error('Error initializing sync:', error);
-        });
-      }
-
+    // Add timeout protection to prevent app from hanging
+    const initTimeout = setTimeout(() => {
+      console.warn('Auth initialization timeout - setting loading to false');
       setLoading(false);
-    });
+    }, 10000); // 10 second timeout
+
+    // Get initial session
+    supabase.auth.getSession()
+      .then(async ({ data: { session } }) => {
+        clearTimeout(initTimeout);
+        setSession(session);
+        setUser(session?.user ?? null);
+
+        if (session?.user) {
+          await fetchProfile(session.user.id);
+
+          // Initialize sync in background - don't block UI
+          initializeSync().catch((error: Error) => {
+            console.error('Error initializing sync:', error);
+          });
+        }
+
+        setLoading(false);
+      })
+      .catch((error) => {
+        clearTimeout(initTimeout);
+        console.error('Error getting initial session:', error);
+        // Set loading to false even on error to prevent infinite loading
+        setLoading(false);
+      });
 
     // Listen for auth changes
     const {
@@ -88,7 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session?.user) {
         await fetchProfile(session.user.id);
 
-        // Initialize sync on auth state change
+        // Initialize sync in background - don't block UI
         initializeSync().catch((error: Error) => {
           console.error('Error initializing sync:', error);
         });
@@ -100,6 +114,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     return () => {
+      clearTimeout(initTimeout);
       subscription.unsubscribe();
     };
   }, []);

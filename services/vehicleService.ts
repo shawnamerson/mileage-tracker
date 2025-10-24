@@ -265,21 +265,47 @@ export async function deleteVehicle(id: string): Promise<void> {
 
 /**
  * Update vehicle mileage after a trip
+ * Uses atomic PostgreSQL function to prevent race conditions
  */
 export async function updateVehicleMileage(
   vehicleId: string,
   additionalMiles: number
 ): Promise<Vehicle | null> {
   try {
-    const vehicle = await getVehicle(vehicleId);
-    if (!vehicle) {
+    const user = await getCurrentUser();
+    if (!user) {
+      throw new Error('No user logged in');
+    }
+
+    // Use the atomic PostgreSQL function to increment mileage
+    // This prevents race conditions when multiple trips complete simultaneously
+    const { data, error } = await supabase
+      .rpc('increment_vehicle_mileage', {
+        vehicle_id_param: vehicleId,
+        miles_to_add: additionalMiles,
+      })
+      .single();
+
+    if (error) {
+      console.error('Error updating vehicle mileage:', error);
+      throw error;
+    }
+
+    if (!data) {
+      console.error('No data returned from mileage update');
       return null;
     }
 
-    const newMileage = vehicle.current_mileage + additionalMiles;
-    return await updateVehicle(vehicleId, {
-      current_mileage: newMileage,
-    });
+    // Cast the return type since RPC doesn't infer it automatically
+    const vehicle = data as Vehicle;
+
+    // Verify the vehicle belongs to the current user
+    if (vehicle.user_id !== user.id) {
+      console.error('Vehicle does not belong to current user');
+      return null;
+    }
+
+    return vehicle;
   } catch (error) {
     console.error('Error updating vehicle mileage:', error);
     throw error;

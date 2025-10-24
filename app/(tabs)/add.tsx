@@ -13,8 +13,6 @@ import { createTrip } from '@/services/tripService';
 import {
   getCurrentLocation,
   reverseGeocode,
-  calculateDistance,
-  LocationCoords,
 } from '@/services/locationService';
 import {
   startBackgroundTracking,
@@ -31,23 +29,14 @@ import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@
 export default function AddTripScreen() {
   const router = useRouter();
   const colors = useColors();
-  const [mode, setMode] = useState<'manual' | 'live'>('live');
   const [loading, setLoading] = useState(false);
   const [tracking, setTracking] = useState(false);
   const [activeTrip, setActiveTrip] = useState<ActiveTrip | null>(null);
-
-  // Manual mode state
-  const [startLocation, setStartLocation] = useState('');
-  const [endLocation, setEndLocation] = useState('');
-  const [startCoords, setStartCoords] = useState<LocationCoords | null>(null);
-  const [endCoords, setEndCoords] = useState<LocationCoords | null>(null);
-  const [distance, setDistance] = useState('');
-
-  // Shared state
   const [purpose, setPurpose] = useState<'business' | 'personal' | 'medical' | 'charity' | 'other'>(
     'business'
   );
   const [notes, setNotes] = useState('');
+  const [recoveryAlertShown, setRecoveryAlertShown] = useState(false);
 
   const purposes = ['business', 'personal', 'medical', 'charity', 'other'] as const;
 
@@ -75,6 +64,121 @@ export default function AddTripScreen() {
     if (trip) {
       setPurpose(trip.purpose);
       setNotes(trip.notes || '');
+
+      // Check for orphaned trip (trip exists but tracking not active)
+      // This can happen if app crashed or auto-tracking failed
+      const tripAge = Date.now() - trip.start_time;
+      const fiveMinutes = 5 * 60 * 1000;
+
+      if (!isActive && tripAge > fiveMinutes && !recoveryAlertShown) {
+        // Show recovery alert only once
+        setRecoveryAlertShown(true);
+
+        // Offer to recover the trip
+        Alert.alert(
+          'Unsaved Trip Found',
+          `Found a trip from ${new Date(trip.start_time).toLocaleString()} with ${trip.distance.toFixed(2)} miles. Do you want to save it?`,
+          [
+            {
+              text: 'Discard',
+              style: 'destructive',
+              onPress: async () => {
+                await clearActiveTrip();
+                setActiveTrip(null);
+                setRecoveryAlertShown(false);
+              },
+            },
+            {
+              text: 'Save Trip',
+              onPress: async () => {
+                await handleRecoverTrip(trip);
+                setRecoveryAlertShown(false);
+              },
+            },
+          ]
+        );
+      }
+    } else {
+      // Reset recovery alert flag when no trip exists
+      setRecoveryAlertShown(false);
+    }
+  };
+
+  const handleRecoverTrip = async (trip: ActiveTrip) => {
+    setLoading(true);
+    try {
+      // Get end location
+      const location = await getCurrentLocation();
+      let endLocation = 'Unknown';
+      let endLat = trip.last_latitude;
+      let endLon = trip.last_longitude;
+
+      if (location) {
+        endLocation = await reverseGeocode(location.latitude, location.longitude);
+        endLat = location.latitude;
+        endLon = location.longitude;
+      }
+
+      // Save trip to database
+      const now = Date.now();
+      try {
+        await createTrip({
+          start_location: trip.start_location,
+          end_location: endLocation,
+          start_latitude: trip.start_latitude,
+          start_longitude: trip.start_longitude,
+          end_latitude: endLat,
+          end_longitude: endLon,
+          distance: trip.distance,
+          start_time: trip.start_time,
+          end_time: now,
+          purpose: trip.purpose,
+          notes: trip.notes,
+        });
+
+        // Clear trip data after successful save
+        await clearActiveTrip();
+        setActiveTrip(null);
+        setPurpose('business');
+        setNotes('');
+
+        Alert.alert('Success', `Trip recovered and saved! Distance: ${trip.distance.toFixed(2)} miles`, [
+          {
+            text: 'OK',
+            onPress: () => router.push('/(tabs)'),
+          },
+        ]);
+      } catch (error: any) {
+        console.error('Error recovering trip:', error);
+
+        // Check if trip was queued for offline upload
+        if (error.queued) {
+          // Trip queued successfully - clear active trip
+          await clearActiveTrip();
+          setActiveTrip(null);
+          setPurpose('business');
+          setNotes('');
+
+          Alert.alert(
+            'Trip Saved Offline',
+            `Your trip (${trip.distance.toFixed(2)} miles) has been saved and will sync when you're back online.`,
+            [
+              {
+                text: 'OK',
+                onPress: () => router.push('/(tabs)'),
+              },
+            ]
+          );
+        } else {
+          // Real error - keep trip for recovery
+          Alert.alert('Error', 'Failed to save trip. Please try again.');
+        }
+      }
+    } catch (error) {
+      console.error('Error in recover trip handler:', error);
+      Alert.alert('Error', 'An unexpected error occurred.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -132,8 +236,8 @@ export default function AddTripScreen() {
             // Get end location
             const location = await getCurrentLocation();
             let endLocation = 'Unknown';
-            let endLat = completedTrip.lastLatitude;
-            let endLon = completedTrip.lastLongitude;
+            let endLat = completedTrip.last_latitude;
+            let endLon = completedTrip.last_longitude;
 
             if (location) {
               endLocation = await reverseGeocode(location.latitude, location.longitude);
@@ -143,142 +247,71 @@ export default function AddTripScreen() {
 
             // Save trip to database
             const now = Date.now();
-            await createTrip({
-              startLocation: completedTrip.startLocation,
-              endLocation,
-              startLatitude: completedTrip.startLatitude,
-              startLongitude: completedTrip.startLongitude,
-              endLatitude: endLat,
-              endLongitude: endLon,
-              distance: completedTrip.distance,
-              startTime: completedTrip.startTime,
-              endTime: now,
-              purpose: completedTrip.purpose,
-              notes: completedTrip.notes,
-            });
+            try {
+              await createTrip({
+                start_location: completedTrip.start_location,
+                end_location: endLocation,
+                start_latitude: completedTrip.start_latitude,
+                start_longitude: completedTrip.start_longitude,
+                end_latitude: endLat,
+                end_longitude: endLon,
+                distance: completedTrip.distance,
+                start_time: completedTrip.start_time,
+                end_time: now,
+                purpose: completedTrip.purpose,
+                notes: completedTrip.notes,
+              });
 
-            // Only clear trip data AFTER successful save
-            await clearActiveTrip();
+              // Clear trip data after successful save
+              await clearActiveTrip();
 
-            setTracking(false);
-            setActiveTrip(null);
-            setPurpose('business');
-            setNotes('');
+              setTracking(false);
+              setActiveTrip(null);
+              setPurpose('business');
+              setNotes('');
 
-            Alert.alert('Success', `Trip saved! Distance: ${completedTrip.distance.toFixed(2)} miles`, [
-              {
-                text: 'OK',
-                onPress: () => router.push('/(tabs)'),
-              },
-            ]);
+              Alert.alert('Success', `Trip saved! Distance: ${completedTrip.distance.toFixed(2)} miles`, [
+                {
+                  text: 'OK',
+                  onPress: () => router.push('/(tabs)'),
+                },
+              ]);
+            } catch (error: any) {
+              console.error('Error stopping trip:', error);
+
+              // Check if trip was queued for offline upload
+              if (error.queued) {
+                // Trip queued successfully - clear active trip
+                await clearActiveTrip();
+                setTracking(false);
+                setActiveTrip(null);
+                setPurpose('business');
+                setNotes('');
+
+                Alert.alert(
+                  'Trip Saved Offline',
+                  `Your trip (${completedTrip.distance.toFixed(2)} miles) has been saved and will sync when you're back online.`,
+                  [
+                    {
+                      text: 'OK',
+                      onPress: () => router.push('/(tabs)'),
+                    },
+                  ]
+                );
+              } else {
+                // Real error - keep trip for recovery
+                Alert.alert('Error', 'Failed to save trip. You can try again from the home screen.');
+              }
+            }
           } catch (error) {
-            console.error('Error stopping trip:', error);
-            Alert.alert('Error', 'Failed to save trip. You can try again from the home screen.');
+            console.error('Error in stop trip handler:', error);
+            Alert.alert('Error', 'An unexpected error occurred.');
           } finally {
             setLoading(false);
           }
         },
       },
     ]);
-  };
-
-  const handleGetCurrentLocation = async (type: 'start' | 'end') => {
-    setLoading(true);
-    try {
-      const location = await getCurrentLocation();
-      if (location) {
-        const address = await reverseGeocode(location.latitude, location.longitude);
-
-        if (type === 'start') {
-          setStartLocation(address);
-          setStartCoords(location);
-          if (endCoords) {
-            const dist = calculateDistance(
-              location.latitude,
-              location.longitude,
-              endCoords.latitude,
-              endCoords.longitude
-            );
-            setDistance(dist.toString());
-          }
-        } else {
-          setEndLocation(address);
-          setEndCoords(location);
-          if (startCoords) {
-            const dist = calculateDistance(
-              startCoords.latitude,
-              startCoords.longitude,
-              location.latitude,
-              location.longitude
-            );
-            setDistance(dist.toString());
-          }
-        }
-      } else {
-        Alert.alert('Error', 'Failed to get location. Please check location permissions.');
-      }
-    } catch (error) {
-      console.error('Error getting location:', error);
-      Alert.alert('Error', 'Failed to get location');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSaveManualTrip = async () => {
-    // Trim inputs to remove whitespace
-    const trimmedStart = startLocation.trim();
-    const trimmedEnd = endLocation.trim();
-
-    if (!trimmedStart || !trimmedEnd || !distance) {
-      Alert.alert('Missing Information', 'Please fill in all required fields');
-      return;
-    }
-
-    const distanceNum = parseFloat(distance);
-    if (isNaN(distanceNum) || distanceNum <= 0) {
-      Alert.alert('Invalid Distance', 'Please enter a valid distance');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const now = Date.now();
-      await createTrip({
-        startLocation: trimmedStart,
-        endLocation: trimmedEnd,
-        startLatitude: startCoords?.latitude,
-        startLongitude: startCoords?.longitude,
-        endLatitude: endCoords?.latitude,
-        endLongitude: endCoords?.longitude,
-        distance: distanceNum,
-        startTime: now - 3600000, // 1 hour ago as default
-        endTime: now,
-        purpose,
-        notes: notes || undefined,
-      });
-
-      Alert.alert('Success', 'Trip saved successfully', [
-        {
-          text: 'OK',
-          onPress: () => {
-            setStartLocation('');
-            setEndLocation('');
-            setStartCoords(null);
-            setEndCoords(null);
-            setDistance('');
-            setPurpose('business');
-            setNotes('');
-            router.push('/(tabs)');
-          },
-        },
-      ]);
-    } catch (error) {
-      console.error('Error saving trip:', error);
-      Alert.alert('Error', 'Failed to save trip');
-    } finally {
-      setLoading(false);
-    }
   };
 
   const formatDuration = (startTime: number) => {
@@ -297,248 +330,68 @@ export default function AddTripScreen() {
   };
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
+    <ScrollView
+      style={[styles.container, { backgroundColor: colors.background }]}
+      showsVerticalScrollIndicator={false}
+    >
       <ThemedView style={styles.header}>
         <ThemedText type="title">Track Trip</ThemedText>
+        <ThemedText style={[styles.subtitle, { color: colors.textSecondary }]}>
+          {tracking ? 'Trip in progress' : 'Start tracking your trip'}
+        </ThemedText>
       </ThemedView>
 
-      {/* Mode Selector */}
-      {!tracking && (
-        <ThemedView style={styles.modeSelector}>
-          <TouchableOpacity
-            style={[
-              styles.modeButton,
-              { borderColor: colors.primary },
-              mode === 'live' && { backgroundColor: colors.primary }
-            ]}
-            onPress={() => setMode('live')}
-          >
-            <ThemedText style={[
-              styles.modeText,
-              { color: colors.primary },
-              mode === 'live' && { color: colors.textInverse }
-            ]}>
-              Live Tracking
+      {tracking && activeTrip ? (
+        <ThemedView style={[styles.activeTrip, { backgroundColor: colors.surface, borderColor: colors.accent }]}>
+          <ThemedView style={[styles.tripStatusBadge, { backgroundColor: colors.success }]}>
+            <ThemedText style={[styles.tripStatusText, { color: colors.textInverse }]}>TRIP IN PROGRESS</ThemedText>
+          </ThemedView>
+
+          <ThemedView style={styles.statRow}>
+            <ThemedText style={styles.statLabel}>Start Location:</ThemedText>
+            <ThemedText style={styles.statValue}>{activeTrip.start_location}</ThemedText>
+          </ThemedView>
+
+          <ThemedView style={styles.statRow}>
+            <ThemedText style={styles.statLabel}>Distance:</ThemedText>
+            <ThemedText style={[styles.statValue, styles.distanceValue]}>
+              {activeTrip.distance.toFixed(2)} miles
             </ThemedText>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.modeButton,
-              { borderColor: colors.primary },
-              mode === 'manual' && { backgroundColor: colors.primary }
-            ]}
-            onPress={() => setMode('manual')}
-          >
-            <ThemedText style={[
-              styles.modeText,
-              { color: colors.primary },
-              mode === 'manual' && { color: colors.textInverse }
-            ]}>
-              Manual Entry
+          </ThemedView>
+
+          <ThemedView style={styles.statRow}>
+            <ThemedText style={styles.statLabel}>Duration:</ThemedText>
+            <ThemedText style={styles.statValue}>
+              {formatDuration(activeTrip.start_time)}
             </ThemedText>
+          </ThemedView>
+
+          <ThemedView style={styles.statRow}>
+            <ThemedText style={styles.statLabel}>Purpose:</ThemedText>
+            <ThemedText style={styles.statValue}>
+              {activeTrip.purpose.charAt(0).toUpperCase() + activeTrip.purpose.slice(1)}
+            </ThemedText>
+          </ThemedView>
+
+          <TouchableOpacity
+            style={[styles.stopButton, loading && styles.buttonDisabled]}
+            onPress={handleStopLiveTrip}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <ThemedText style={styles.stopButtonText}>Stop & Save Trip</ThemedText>
+            )}
           </TouchableOpacity>
         </ThemedView>
-      )}
-
-      {/* Live Tracking Mode */}
-      {mode === 'live' && (
+      ) : (
         <>
-          {tracking && activeTrip ? (
-            <ThemedView style={[styles.activeTrip, { backgroundColor: colors.surface, borderColor: colors.accent }]}>
-              <ThemedView style={[styles.tripStatusBadge, { backgroundColor: colors.success }]}>
-                <ThemedText style={[styles.tripStatusText, { color: colors.textInverse }]}>TRIP IN PROGRESS</ThemedText>
-              </ThemedView>
-
-              <ThemedView style={styles.statRow}>
-                <ThemedText style={styles.statLabel}>Start Location:</ThemedText>
-                <ThemedText style={styles.statValue}>{activeTrip.startLocation}</ThemedText>
-              </ThemedView>
-
-              <ThemedView style={styles.statRow}>
-                <ThemedText style={styles.statLabel}>Distance:</ThemedText>
-                <ThemedText style={[styles.statValue, styles.distanceValue]}>
-                  {activeTrip.distance.toFixed(2)} miles
-                </ThemedText>
-              </ThemedView>
-
-              <ThemedView style={styles.statRow}>
-                <ThemedText style={styles.statLabel}>Duration:</ThemedText>
-                <ThemedText style={styles.statValue}>
-                  {formatDuration(activeTrip.startTime)}
-                </ThemedText>
-              </ThemedView>
-
-              <ThemedView style={styles.statRow}>
-                <ThemedText style={styles.statLabel}>Purpose:</ThemedText>
-                <ThemedText style={styles.statValue}>
-                  {activeTrip.purpose.charAt(0).toUpperCase() + activeTrip.purpose.slice(1)}
-                </ThemedText>
-              </ThemedView>
-
-              <TouchableOpacity
-                style={[styles.stopButton, loading && styles.buttonDisabled]}
-                onPress={handleStopLiveTrip}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <ThemedText style={styles.stopButtonText}>Stop & Save Trip</ThemedText>
-                )}
-              </TouchableOpacity>
-            </ThemedView>
-          ) : (
-            <>
-              <ThemedView style={[styles.infoBox, { backgroundColor: `${colors.accent}15` }]}>
-                <ThemedText style={[styles.infoText, { color: colors.textSecondary }]}>
-                  Live tracking will automatically record your distance as you drive. Keep the app running in the background.
-                </ThemedText>
-              </ThemedView>
-
-              <ThemedView style={styles.section}>
-                <ThemedText type="subtitle" style={styles.sectionTitle}>
-                  Purpose
-                </ThemedText>
-                <ThemedView style={styles.purposeContainer}>
-                  {purposes.map((p) => (
-                    <TouchableOpacity
-                      key={p}
-                      style={[
-                        styles.purposeButton,
-                        { borderColor: colors.primary },
-                        purpose === p && { backgroundColor: colors.primary }
-                      ]}
-                      onPress={() => setPurpose(p)}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.purposeText,
-                          { color: colors.primary },
-                          purpose === p && { color: colors.textInverse }
-                        ]}
-                      >
-                        {p.charAt(0).toUpperCase() + p.slice(1)}
-                      </ThemedText>
-                    </TouchableOpacity>
-                  ))}
-                </ThemedView>
-              </ThemedView>
-
-              <ThemedView style={styles.section}>
-                <ThemedText type="subtitle" style={styles.sectionTitle}>
-                  Notes (optional)
-                </ThemedText>
-                <TextInput
-                  style={[
-                    styles.input,
-                    styles.notesInput,
-                    {
-                      backgroundColor: colors.surface,
-                      borderColor: colors.border,
-                      color: colors.text
-                    }
-                  ]}
-                  value={notes}
-                  onChangeText={setNotes}
-                  placeholder="Add notes about this trip"
-                  placeholderTextColor={colors.textTertiary}
-                  multiline
-                  numberOfLines={3}
-                />
-              </ThemedView>
-
-              <TouchableOpacity
-                style={[styles.startButton, loading && styles.buttonDisabled]}
-                onPress={handleStartLiveTrip}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <ThemedText style={styles.startButtonText}>Start Trip</ThemedText>
-                )}
-              </TouchableOpacity>
-            </>
-          )}
-        </>
-      )}
-
-      {/* Manual Entry Mode */}
-      {mode === 'manual' && (
-        <>
-          <ThemedView style={styles.section}>
-            <ThemedText type="subtitle" style={styles.sectionTitle}>
-              Start Location
+          <ThemedView style={[styles.infoBox, { backgroundColor: `${colors.accent}15` }]}>
+            <ThemedText style={[styles.infoText, { color: colors.textSecondary }]}>
+              💡 Live tracking will automatically record your distance as you drive.
+              Keep the app running in the background for accurate tracking.
             </ThemedText>
-            <TextInput
-              style={[
-                styles.input,
-                {
-                  backgroundColor: colors.surface,
-                  borderColor: colors.border,
-                  color: colors.text
-                }
-              ]}
-              value={startLocation}
-              onChangeText={setStartLocation}
-              placeholder="Enter start location"
-              placeholderTextColor={colors.textTertiary}
-            />
-            <TouchableOpacity
-              style={styles.button}
-              onPress={() => handleGetCurrentLocation('start')}
-              disabled={loading}
-            >
-              <ThemedText style={styles.buttonText}>Use Current Location</ThemedText>
-            </TouchableOpacity>
-          </ThemedView>
-
-          <ThemedView style={styles.section}>
-            <ThemedText type="subtitle" style={styles.sectionTitle}>
-              End Location
-            </ThemedText>
-            <TextInput
-              style={[
-                styles.input,
-                {
-                  backgroundColor: colors.surface,
-                  borderColor: colors.border,
-                  color: colors.text
-                }
-              ]}
-              value={endLocation}
-              onChangeText={setEndLocation}
-              placeholder="Enter end location"
-              placeholderTextColor={colors.textTertiary}
-            />
-            <TouchableOpacity
-              style={styles.button}
-              onPress={() => handleGetCurrentLocation('end')}
-              disabled={loading}
-            >
-              <ThemedText style={styles.buttonText}>Use Current Location</ThemedText>
-            </TouchableOpacity>
-          </ThemedView>
-
-          <ThemedView style={styles.section}>
-            <ThemedText type="subtitle" style={styles.sectionTitle}>
-              Distance (miles)
-            </ThemedText>
-            <TextInput
-              style={[
-                styles.input,
-                {
-                  backgroundColor: colors.surface,
-                  borderColor: colors.border,
-                  color: colors.text
-                }
-              ]}
-              value={distance}
-              onChangeText={setDistance}
-              placeholder="Enter distance"
-              placeholderTextColor={colors.textTertiary}
-              keyboardType="decimal-pad"
-            />
           </ThemedView>
 
           <ThemedView style={styles.section}>
@@ -589,19 +442,19 @@ export default function AddTripScreen() {
               placeholder="Add notes about this trip"
               placeholderTextColor={colors.textTertiary}
               multiline
-              numberOfLines={4}
+              numberOfLines={3}
             />
           </ThemedView>
 
           <TouchableOpacity
-            style={[styles.saveButton, loading && styles.buttonDisabled]}
-            onPress={handleSaveManualTrip}
+            style={[styles.startButton, loading && styles.buttonDisabled]}
+            onPress={handleStartLiveTrip}
             disabled={loading}
           >
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <ThemedText style={styles.saveButtonText}>Save Trip</ThemedText>
+              <ThemedText style={styles.startButtonText}>Start Trip</ThemedText>
             )}
           </TouchableOpacity>
         </>
@@ -620,31 +473,10 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.lg,
     marginTop: Spacing.xxl,
   },
-  modeSelector: {
-    flexDirection: 'row',
-    gap: Spacing.md,
-    marginBottom: Spacing.lg,
-  },
-  modeButton: {
-    flex: 1,
-    paddingVertical: Spacing.md,
-    borderRadius: BorderRadius.md,
-    borderWidth: 2,
-    borderColor: Colors.primary,
-    backgroundColor: 'transparent',
-    alignItems: 'center',
-    ...Shadows.sm,
-  },
-  modeButtonActive: {
-    backgroundColor: Colors.primary,
-  },
-  modeText: {
-    color: Colors.primary,
-    fontSize: Typography.base,
-    fontWeight: Typography.semibold,
-  },
-  modeTextActive: {
-    color: Colors.textInverse,
+  subtitle: {
+    marginTop: Spacing.xs,
+    fontSize: Typography.sm,
+    color: Colors.textSecondary,
   },
   infoBox: {
     padding: Spacing.lg,
@@ -717,18 +549,6 @@ const styles = StyleSheet.create({
     height: 100,
     textAlignVertical: 'top',
   },
-  button: {
-    marginTop: Spacing.sm,
-    padding: Spacing.md,
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.md,
-    alignItems: 'center',
-    ...Shadows.sm,
-  },
-  buttonText: {
-    color: Colors.textInverse,
-    fontWeight: Typography.semibold,
-  },
   buttonDisabled: {
     opacity: 0.6,
   },
@@ -745,15 +565,9 @@ const styles = StyleSheet.create({
     borderColor: '#007AFF',
     backgroundColor: 'transparent',
   },
-  purposeButtonActive: {
-    backgroundColor: '#007AFF',
-  },
   purposeText: {
     color: '#007AFF',
     fontSize: 14,
-  },
-  purposeTextActive: {
-    color: '#fff',
   },
   startButton: {
     marginTop: Spacing.lg,
@@ -778,20 +592,6 @@ const styles = StyleSheet.create({
     ...Shadows.md,
   },
   stopButtonText: {
-    color: Colors.textInverse,
-    fontSize: Typography.lg,
-    fontWeight: Typography.bold,
-  },
-  saveButton: {
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.xxl,
-    padding: Spacing.lg,
-    backgroundColor: Colors.success,
-    borderRadius: BorderRadius.lg,
-    alignItems: 'center',
-    ...Shadows.md,
-  },
-  saveButtonText: {
     color: Colors.textInverse,
     fontSize: Typography.lg,
     fontWeight: Typography.bold,

@@ -1,7 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Trip } from './database';
+import { Trip } from './tripService';
 
 const NOTIFICATIONS_ENABLED_KEY = '@mileage_tracker:notifications_enabled';
 
@@ -126,7 +126,7 @@ export async function sendTripCompletedNotification(trip: Trip): Promise<void> {
     await Notifications.scheduleNotificationAsync({
       content: {
         title: `${emoji} Trip Recorded`,
-        body: `${trip.distance.toFixed(1)} mi • ${purposeText}\n${trip.startLocation} → ${trip.endLocation}`,
+        body: `${trip.distance.toFixed(1)} mi • ${purposeText}\n${trip.start_location} → ${trip.end_location}`,
         data: {
           tripId: trip.id,
           purpose: trip.purpose,

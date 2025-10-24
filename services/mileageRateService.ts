@@ -1,28 +1,57 @@
-import { getDatabase, MileageRate } from './database';
+import { supabase } from './supabase';
+
+export interface MileageRate {
+  id?: string;
+  year: number;
+  rate: number;
+  created_at?: string;
+  updated_at?: string;
+}
 
 /**
  * Get the mileage rate for a specific year
  */
 export async function getRateForYear(year: number): Promise<number> {
-  const db = getDatabase();
-  const result = await db.getFirstAsync<{ rate: number }>(
-    'SELECT rate FROM mileage_rates WHERE year = ?',
-    [year]
-  );
+  try {
+    const { data, error } = await supabase
+      .from('mileage_rates')
+      .select('rate')
+      .eq('year', year)
+      .single();
 
-  // If no rate found for the year, return a default rate of 0.70
-  return result?.rate ?? 0.70;
+    if (error) {
+      console.error('[Mileage Rates] Error fetching rate for year:', error);
+      // If no rate found for the year, return a default rate of 0.70
+      return 0.70;
+    }
+
+    return data?.rate ?? 0.70;
+  } catch (error) {
+    console.error('[Mileage Rates] Error in getRateForYear:', error);
+    return 0.70;
+  }
 }
 
 /**
  * Get all mileage rates, ordered by year descending
  */
 export async function getAllRates(): Promise<MileageRate[]> {
-  const db = getDatabase();
-  const result = await db.getAllAsync<MileageRate>(
-    'SELECT * FROM mileage_rates ORDER BY year DESC'
-  );
-  return result;
+  try {
+    const { data, error } = await supabase
+      .from('mileage_rates')
+      .select('*')
+      .order('year', { ascending: false });
+
+    if (error) {
+      console.error('[Mileage Rates] Error fetching all rates:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('[Mileage Rates] Error in getAllRates:', error);
+    return [];
+  }
 }
 
 /**
@@ -37,27 +66,27 @@ export async function setRateForYear(year: number, rate: number): Promise<void> 
     throw new Error('Invalid rate (must be between $0.00 and $10.00)');
   }
 
-  const db = getDatabase();
-  const now = Date.now();
+  try {
+    // Use upsert to insert or update
+    const { error } = await supabase
+      .from('mileage_rates')
+      .upsert({
+        year,
+        rate,
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: 'year',
+      });
 
-  // Check if rate exists for this year
-  const existing = await db.getFirstAsync<{ id: number }>(
-    'SELECT id FROM mileage_rates WHERE year = ?',
-    [year]
-  );
+    if (error) {
+      console.error('[Mileage Rates] Error setting rate for year:', error);
+      throw new Error('Failed to save mileage rate');
+    }
 
-  if (existing) {
-    // Update existing rate
-    await db.runAsync(
-      'UPDATE mileage_rates SET rate = ?, updatedAt = ? WHERE year = ?',
-      [rate, now, year]
-    );
-  } else {
-    // Insert new rate
-    await db.runAsync(
-      'INSERT INTO mileage_rates (year, rate, createdAt, updatedAt) VALUES (?, ?, ?, ?)',
-      [year, rate, now, now]
-    );
+    console.log(`[Mileage Rates] ✅ Set rate for ${year}: $${rate.toFixed(3)}`);
+  } catch (error) {
+    console.error('[Mileage Rates] Error in setRateForYear:', error);
+    throw error;
   }
 }
 
@@ -79,6 +108,20 @@ export async function getRatesByYear(): Promise<Map<number, number>> {
  * Delete a mileage rate for a specific year
  */
 export async function deleteRateForYear(year: number): Promise<void> {
-  const db = getDatabase();
-  await db.runAsync('DELETE FROM mileage_rates WHERE year = ?', [year]);
+  try {
+    const { error } = await supabase
+      .from('mileage_rates')
+      .delete()
+      .eq('year', year);
+
+    if (error) {
+      console.error('[Mileage Rates] Error deleting rate for year:', error);
+      throw new Error('Failed to delete mileage rate');
+    }
+
+    console.log(`[Mileage Rates] ✅ Deleted rate for ${year}`);
+  } catch (error) {
+    console.error('[Mileage Rates] Error in deleteRateForYear:', error);
+    throw error;
+  }
 }

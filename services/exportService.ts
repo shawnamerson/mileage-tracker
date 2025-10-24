@@ -1,6 +1,6 @@
 import { Paths, File } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { Trip } from './database';
+import { Trip } from './tripService';
 
 export interface ExportOptions {
   format: 'csv' | 'json';
@@ -53,25 +53,25 @@ function tripsToCSV(trips: Trip[]): string {
   const csvRows = [headers.join(',')];
 
   for (const trip of trips) {
-    const startDate = new Date(trip.startTime);
-    const endDate = new Date(trip.endTime);
-    const durationMinutes = Math.round((trip.endTime - trip.startTime) / 60000);
+    const startDate = new Date(trip.start_time);
+    const endDate = new Date(trip.end_time);
+    const durationMinutes = Math.round((trip.end_time - trip.start_time) / 60000);
 
     const row = [
       trip.id || '',
       startDate.toLocaleDateString(),
       startDate.toLocaleTimeString(),
       endDate.toLocaleTimeString(),
-      escapeCSVField(trip.startLocation),
-      escapeCSVField(trip.endLocation),
+      escapeCSVField(trip.start_location),
+      escapeCSVField(trip.end_location),
       trip.distance.toFixed(2),
       durationMinutes,
       escapeCSVField(trip.purpose),
       escapeCSVField(trip.notes || ''),
-      trip.startLatitude?.toFixed(6) || '',
-      trip.startLongitude?.toFixed(6) || '',
-      trip.endLatitude?.toFixed(6) || '',
-      trip.endLongitude?.toFixed(6) || '',
+      trip.start_latitude?.toFixed(6) || '',
+      trip.start_longitude?.toFixed(6) || '',
+      trip.end_latitude?.toFixed(6) || '',
+      trip.end_longitude?.toFixed(6) || '',
     ];
 
     csvRows.push(row.join(','));
@@ -151,7 +151,7 @@ export function generateTaxSummary(trips: Trip[], year?: number): string {
 
   // Filter trips by year
   const yearTrips = trips.filter((trip) => {
-    const tripYear = new Date(trip.startTime).getFullYear();
+    const tripYear = new Date(trip.start_time).getFullYear();
     return tripYear === targetYear;
   });
 

@@ -2,7 +2,7 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { startBackgroundTracking, stopBackgroundTracking, clearActiveTrip, isTrackingActive } from './backgroundTracking';
-import { reverseGeocode, getCurrentLocation } from './locationService';
+import { reverseGeocode, getCurrentLocation, calculateDistance } from './locationService';
 import { createTrip } from './tripService';
 import { sendTripCompletedNotification } from './notificationService';
 
@@ -27,6 +27,9 @@ let locationState: LocationState = {
   drivingDetected: false,
 };
 
+// Store last location for speed calculation
+let lastLocationForSpeed: { latitude: number; longitude: number; timestamp: number } | null = null;
+
 // Define the auto-tracking monitoring task
 TaskManager.defineTask(AUTO_TRACKING_TASK, async ({ data, error }) => {
   if (error) {
@@ -39,18 +42,50 @@ TaskManager.defineTask(AUTO_TRACKING_TASK, async ({ data, error }) => {
     const location = locations[0];
 
     if (!location || !location.coords) {
+      console.log('[AutoTracking] No location data received');
       return;
     }
 
     try {
       const enabled = await isAutoTrackingEnabled();
       if (!enabled) {
+        console.log('[AutoTracking] Auto-tracking is disabled, skipping location update');
         return;
       }
 
       const isTracking = await isTrackingActive();
-      const speed = (location.coords.speed || 0) * 2.23694; // m/s to mph
+
+      // Calculate speed - use device speed if available, otherwise calculate manually
+      let speed = 0;
+      const deviceSpeed = location.coords.speed || 0;
+
+      if (deviceSpeed > 0) {
+        // Device provided speed (in m/s)
+        speed = deviceSpeed * 2.23694; // Convert m/s to mph
+        console.log(`[AutoTracking] Device speed: ${speed.toFixed(1)} mph`);
+      } else if (lastLocationForSpeed) {
+        // Calculate speed manually from last location
+        const { latitude: lastLat, longitude: lastLon, timestamp: lastTime } = lastLocationForSpeed;
+        const { latitude, longitude } = location.coords;
+        const timeDiff = Date.now() - lastTime; // milliseconds
+
+        if (timeDiff > 0) {
+          const distance = calculateDistance(lastLat, lastLon, latitude, longitude); // miles
+          const hours = timeDiff / (1000 * 60 * 60); // convert ms to hours
+          speed = distance / hours; // mph
+          console.log(`[AutoTracking] Calculated speed: ${speed.toFixed(1)} mph (${distance.toFixed(4)} mi in ${(timeDiff/1000).toFixed(1)}s)`);
+        }
+      }
+
+      // Update last location for next speed calculation
+      lastLocationForSpeed = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        timestamp: Date.now(),
+      };
+
       const now = Date.now();
+      console.log(`[AutoTracking] Location update: speed=${speed.toFixed(1)} mph, tracking=${isTracking}, lat=${location.coords.latitude.toFixed(6)}, lon=${location.coords.longitude.toFixed(6)}`);
 
       // Update location state
       locationState.lastSpeed = speed;
@@ -143,8 +178,8 @@ async function autoStopTrip() {
       // Get end location
       const location = await getCurrentLocation();
       let endLocation = 'Unknown';
-      let endLat = completedTrip.lastLatitude;
-      let endLon = completedTrip.lastLongitude;
+      let endLat = completedTrip.last_latitude;
+      let endLon = completedTrip.last_longitude;
 
       if (location) {
         endLocation = await reverseGeocode(location.latitude, location.longitude);
@@ -155,46 +190,54 @@ async function autoStopTrip() {
       // Save trip directly to database
       const now = Date.now();
       const tripData = {
-        startLocation: completedTrip.startLocation,
-        endLocation,
-        startLatitude: completedTrip.startLatitude,
-        startLongitude: completedTrip.startLongitude,
-        endLatitude: endLat,
-        endLongitude: endLon,
+        start_location: completedTrip.start_location,
+        end_location: endLocation,
+        start_latitude: completedTrip.start_latitude,
+        start_longitude: completedTrip.start_longitude,
+        end_latitude: endLat,
+        end_longitude: endLon,
         distance: completedTrip.distance,
-        startTime: completedTrip.startTime,
-        endTime: now,
+        start_time: completedTrip.start_time,
+        end_time: now,
         purpose: completedTrip.purpose,
         notes: completedTrip.notes,
       };
 
       console.log('[AutoTracking] Saving trip data:', {
         distance: tripData.distance,
-        from: tripData.startLocation,
-        to: tripData.endLocation,
+        from: tripData.start_location,
+        to: tripData.end_location,
         purpose: tripData.purpose,
       });
 
-      const tripId = await createTrip(tripData);
-
-      // Only clear trip data AFTER successful save
-      await clearActiveTrip();
-
-      console.log(`[AutoTracking] ✅ Trip saved successfully with ID: ${tripId}`);
-      console.log(`[AutoTracking] Trip details: ${tripData.distance.toFixed(2)} miles from ${tripData.startLocation} to ${tripData.endLocation}`);
-
-      // Send notification about completed trip
       try {
-        const now = Date.now();
-        await sendTripCompletedNotification({
-          ...tripData,
-          id: tripId,
-          createdAt: now,
-          updatedAt: now,
-        });
-        console.log('[AutoTracking] 🔔 Trip completion notification sent');
-      } catch (notifError) {
-        console.error('[AutoTracking] Error sending notification:', notifError);
+        const savedTrip = await createTrip(tripData);
+
+        // Clear trip data after successful save
+        await clearActiveTrip();
+
+        console.log(`[AutoTracking] ✅ Trip saved successfully with ID: ${savedTrip.id}`);
+        console.log(`[AutoTracking] Trip details: ${tripData.distance.toFixed(2)} miles from ${tripData.start_location} to ${tripData.end_location}`);
+
+        // Send notification about completed trip
+        try {
+          await sendTripCompletedNotification(savedTrip);
+          console.log('[AutoTracking] 🔔 Trip completion notification sent');
+        } catch (notifError) {
+          console.error('[AutoTracking] Error sending notification:', notifError);
+        }
+      } catch (error: any) {
+        // Check if trip was queued for offline upload
+        if (error.queued) {
+          console.log('[AutoTracking] ⏱️ Trip queued for upload when connection available');
+          // Trip queued successfully - clear active trip so user can start new ones
+          await clearActiveTrip();
+          console.log('[AutoTracking] ✅ Active trip cleared - trip will sync automatically');
+        } else {
+          // Real error - keep trip in AsyncStorage for manual recovery
+          console.error('[AutoTracking] ❌ Failed to save trip:', error.message);
+          throw error;
+        }
       }
     } else {
       console.log(`[AutoTracking] ❌ Trip too short (${completedTrip.distance.toFixed(2)} miles < ${MIN_TRIP_DISTANCE} miles minimum), discarding`);
@@ -224,10 +267,11 @@ export async function startAutoTracking(): Promise<boolean> {
     }
 
     // Start location monitoring
+    console.log('[AutoTracking] Starting auto-tracking location updates...');
     await Location.startLocationUpdatesAsync(AUTO_TRACKING_TASK, {
       accuracy: Location.Accuracy.Balanced,
-      timeInterval: 10000, // Check every 10 seconds
-      distanceInterval: 50, // Or every 50 meters
+      timeInterval: 10000, // Check every 10 seconds for better battery life
+      distanceInterval: 0, // Always get updates even when stationary (needed to detect trip end)
       foregroundService: {
         notificationTitle: 'Auto Tracking Active',
         notificationBody: 'Mileage Tracker will automatically detect your trips',
@@ -238,6 +282,8 @@ export async function startAutoTracking(): Promise<boolean> {
     });
 
     await AsyncStorage.setItem(AUTO_TRACKING_ENABLED_KEY, 'true');
+    console.log('[AutoTracking] ✅ Auto-tracking started successfully');
+    console.log('[AutoTracking] Configuration: Balanced accuracy, 10s interval, always-on (no distance threshold)');
     return true;
   } catch (error) {
     console.error('Error starting auto-tracking:', error);
@@ -252,12 +298,11 @@ export async function stopAutoTracking(): Promise<void> {
       await Location.stopLocationUpdatesAsync(AUTO_TRACKING_TASK);
     }
 
-    // Also stop any active trip
+    // Also stop and SAVE any active trip before disabling auto-tracking
     const isTracking = await isTrackingActive();
     if (isTracking) {
-      await stopBackgroundTracking();
-      // Clear trip data when manually stopping auto-tracking
-      await clearActiveTrip();
+      console.log('[AutoTracking] Stopping auto-tracking with active trip - auto-completing trip first...');
+      await autoStopTrip(); // This will save the trip and then clear it
     }
 
     await AsyncStorage.setItem(AUTO_TRACKING_ENABLED_KEY, 'false');
@@ -276,7 +321,7 @@ export async function isAutoTrackingEnabled(): Promise<boolean> {
   try {
     const enabled = await AsyncStorage.getItem(AUTO_TRACKING_ENABLED_KEY);
     return enabled === 'true';
-  } catch (error) {
+  } catch {
     return false;
   }
 }
@@ -285,7 +330,7 @@ export async function isAutoTrackingActive(): Promise<boolean> {
   try {
     const hasStarted = await Location.hasStartedLocationUpdatesAsync(AUTO_TRACKING_TASK);
     return hasStarted;
-  } catch (error) {
+  } catch {
     return false;
   }
 }

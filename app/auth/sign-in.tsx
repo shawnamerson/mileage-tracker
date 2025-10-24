@@ -9,16 +9,15 @@ import {
   ScrollView,
   Image,
 } from 'react-native';
-import { router } from 'expo-router';
+import { Link } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { useColors, useShadows } from '@/constants/Design';
+import { useColors } from '@/constants/Design';
 import { signInWithApple, isAppleAuthAvailable } from '@/services/authService';
 
 export default function SignInScreen() {
   const colors = useColors();
-  const shadows = useShadows();
   const [loading, setLoading] = useState(false);
   const [appleAuthAvailable, setAppleAuthAvailable] = useState(false);
 
@@ -85,7 +84,6 @@ export default function SignInScreen() {
                 cornerRadius={12}
                 style={styles.appleButton}
                 onPress={handleAppleSignIn}
-                disabled={loading}
               />
             ) : (
               <View style={[styles.appleButton, styles.unavailableButton]}>
@@ -100,6 +98,16 @@ export default function SignInScreen() {
                 <ActivityIndicator size="large" color={colors.primary} />
               </View>
             )}
+
+            {/* Links */}
+            <View style={styles.links}>
+              <ThemedText style={{ color: colors.textSecondary }}>
+                Don&apos;t have an account?{' '}
+                <Link href="/auth/sign-up" style={{ color: colors.primary }}>
+                  Sign Up
+                </Link>
+              </ThemedText>
+            </View>
           </View>
         </ThemedView>
       </ScrollView>
@@ -153,6 +161,10 @@ const styles = StyleSheet.create({
   },
   loadingOverlay: {
     marginTop: 20,
+    alignItems: 'center',
+  },
+  links: {
+    marginTop: 24,
     alignItems: 'center',
   },
 });

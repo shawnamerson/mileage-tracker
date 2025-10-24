@@ -9,16 +9,15 @@ import {
   ScrollView,
   Image,
 } from 'react-native';
-import { Link, router } from 'expo-router';
+import { Link } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { useColors, useShadows } from '@/constants/Design';
+import { useColors } from '@/constants/Design';
 import { signInWithApple, isAppleAuthAvailable } from '@/services/authService';
 
 export default function SignUpScreen() {
   const colors = useColors();
-  const shadows = useShadows();
   const [loading, setLoading] = useState(false);
   const [appleAuthAvailable, setAppleAuthAvailable] = useState(false);
 
@@ -85,7 +84,6 @@ export default function SignUpScreen() {
                 cornerRadius={12}
                 style={styles.appleButton}
                 onPress={handleAppleSignIn}
-                disabled={loading}
               />
             ) : (
               <View style={[styles.appleButton, styles.unavailableButton]}>

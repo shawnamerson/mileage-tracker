@@ -1,8 +1,7 @@
 import { Paths, File } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getAllTrips, createTrip } from './tripService';
-import { Trip } from './database';
+import { getAllTrips, createTrip, Trip } from './tripService';
 
 const BACKUP_METADATA_KEY = '@mileage_tracker:backup_metadata';
 
@@ -92,7 +91,7 @@ function validateBackup(data: any): boolean {
   // Validate first trip to ensure it has required fields
   if (data.trips.length > 0) {
     const firstTrip = data.trips[0];
-    const requiredFields = ['startLocation', 'endLocation', 'distance', 'startTime', 'endTime', 'purpose'];
+    const requiredFields = ['start_location', 'end_location', 'distance', 'start_time', 'end_time', 'purpose'];
 
     for (const field of requiredFields) {
       if (!(field in firstTrip)) {
@@ -131,26 +130,26 @@ export async function restoreFromBackup(fileUri: string, mode: 'merge' | 'replac
     // Get existing trip IDs to avoid duplicates (based on timestamp and location)
     const existingTrips = await getAllTrips();
     const existingTripKeys = new Set(
-      existingTrips.map((t) => `${t.startTime}_${t.endTime}_${t.startLocation}_${t.endLocation}`)
+      existingTrips.map((t) => `${t.start_time}_${t.end_time}_${t.start_location}_${t.end_location}`)
     );
 
     let importedCount = 0;
 
     // Import trips that don't already exist
     for (const trip of trips) {
-      const tripKey = `${trip.startTime}_${trip.endTime}_${trip.startLocation}_${trip.endLocation}`;
+      const tripKey = `${trip.start_time}_${trip.end_time}_${trip.start_location}_${trip.end_location}`;
 
       if (!existingTripKeys.has(tripKey)) {
         await createTrip({
-          startLocation: trip.startLocation,
-          endLocation: trip.endLocation,
-          startLatitude: trip.startLatitude,
-          startLongitude: trip.startLongitude,
-          endLatitude: trip.endLatitude,
-          endLongitude: trip.endLongitude,
+          start_location: trip.start_location,
+          end_location: trip.end_location,
+          start_latitude: trip.start_latitude,
+          start_longitude: trip.start_longitude,
+          end_latitude: trip.end_latitude,
+          end_longitude: trip.end_longitude,
           distance: trip.distance,
-          startTime: trip.startTime,
-          endTime: trip.endTime,
+          start_time: trip.start_time,
+          end_time: trip.end_time,
           purpose: trip.purpose,
           notes: trip.notes,
         });

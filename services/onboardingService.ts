@@ -1,58 +1,62 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-const ONBOARDING_COMPLETED_KEY = 'onboarding_completed';
-const ONBOARDING_VERSION_KEY = 'onboarding_version';
-
-// Increment this when you want to show onboarding again (e.g., for new features)
-const CURRENT_ONBOARDING_VERSION = 1;
+import { getAllVehicles } from './vehicleService';
+import { getCurrentUser } from './authService';
 
 /**
  * Check if onboarding has been completed
+ *
+ * Uses Supabase as single source of truth:
+ * - If user has at least one vehicle → onboarding complete
+ * - If user has no vehicles → needs onboarding
+ *
+ * This approach:
+ * - Works across devices (no local storage)
+ * - Automatically handles account switching
+ * - No sync issues between storage and database
  */
 export async function isOnboardingCompleted(): Promise<boolean> {
   try {
-    const completed = await AsyncStorage.getItem(ONBOARDING_COMPLETED_KEY);
-    const version = await AsyncStorage.getItem(ONBOARDING_VERSION_KEY);
-
-    // If never completed, return false
-    if (!completed || completed !== 'true') {
+    // Check if user is authenticated first
+    const user = await getCurrentUser();
+    if (!user) {
+      console.log('[Onboarding] No user logged in');
       return false;
     }
 
-    // If version doesn't match, return false (re-show onboarding for updates)
-    const savedVersion = version ? parseInt(version, 10) : 0;
-    return savedVersion >= CURRENT_ONBOARDING_VERSION;
+    // Database is the source of truth: user has vehicles = onboarding complete
+    const vehicles = await getAllVehicles();
+    const hasVehicles = vehicles.length > 0;
+
+    if (!hasVehicles) {
+      console.log('[Onboarding] No vehicles found for user. Showing onboarding.');
+    }
+
+    return hasVehicles;
   } catch (error) {
-    console.error('Error checking onboarding status:', error);
+    console.error('[Onboarding] Error checking status:', error);
+    // On error (e.g., network issues), assume not completed to be safe
+    // This ensures users can still complete onboarding if there's a connectivity issue
     return false;
   }
 }
 
 /**
  * Mark onboarding as completed
+ *
+ * No-op function kept for API compatibility.
+ * Onboarding is automatically "complete" when user creates their first vehicle.
  */
 export async function completeOnboarding(): Promise<void> {
-  try {
-    await AsyncStorage.setItem(ONBOARDING_COMPLETED_KEY, 'true');
-    await AsyncStorage.setItem(
-      ONBOARDING_VERSION_KEY,
-      CURRENT_ONBOARDING_VERSION.toString()
-    );
-  } catch (error) {
-    console.error('Error completing onboarding:', error);
-    throw error;
-  }
+  // No action needed - vehicle creation in database marks onboarding as complete
+  console.log('[Onboarding] Marked complete (vehicle created in database)');
 }
 
 /**
- * Reset onboarding (for testing or re-showing)
+ * Reset onboarding (for testing)
+ *
+ * To reset onboarding, delete all vehicles for the user.
+ * This function is kept for API compatibility but could be removed.
  */
 export async function resetOnboarding(): Promise<void> {
-  try {
-    await AsyncStorage.removeItem(ONBOARDING_COMPLETED_KEY);
-    await AsyncStorage.removeItem(ONBOARDING_VERSION_KEY);
-  } catch (error) {
-    console.error('Error resetting onboarding:', error);
-    throw error;
-  }
+  console.log('[Onboarding] Reset requested. Delete vehicles to reset onboarding.');
+  // No action needed - deleting vehicles will automatically trigger onboarding
 }

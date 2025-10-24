@@ -8,20 +8,20 @@ const ACTIVE_TRIP_KEY = 'active_trip';
 
 export interface ActiveTrip {
   id: string;
-  startLocation: string;
-  startLatitude: number;
-  startLongitude: number;
-  startTime: number;
+  start_location: string;
+  start_latitude: number;
+  start_longitude: number;
+  start_time: number;
   purpose: 'business' | 'personal' | 'medical' | 'charity' | 'other';
   notes?: string;
   distance: number;
-  locationPoints: Array<{
+  location_points: {
     latitude: number;
     longitude: number;
     timestamp: number;
-  }>;
-  lastLatitude: number;
-  lastLongitude: number;
+  }[];
+  last_latitude: number;
+  last_longitude: number;
 }
 
 // Define the background task
@@ -49,8 +49,8 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
 
         // Calculate distance from last point
         const distanceFromLast = calculateDistance(
-          activeTrip.lastLatitude,
-          activeTrip.lastLongitude,
+          activeTrip.last_latitude,
+          activeTrip.last_longitude,
           latitude,
           longitude
         );
@@ -58,9 +58,9 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
         // Only update if moved at least 10 meters (0.006 miles)
         if (distanceFromLast > 0.006) {
           activeTrip.distance += distanceFromLast;
-          activeTrip.lastLatitude = latitude;
-          activeTrip.lastLongitude = longitude;
-          activeTrip.locationPoints.push({
+          activeTrip.last_latitude = latitude;
+          activeTrip.last_longitude = longitude;
+          activeTrip.location_points.push({
             latitude,
             longitude,
             timestamp: Date.now(),
@@ -98,22 +98,22 @@ export async function startBackgroundTracking(
     // Create active trip
     const activeTrip: ActiveTrip = {
       id: Date.now().toString(),
-      startLocation,
-      startLatitude,
-      startLongitude,
-      startTime: Date.now(),
+      start_location: startLocation,
+      start_latitude: startLatitude,
+      start_longitude: startLongitude,
+      start_time: Date.now(),
       purpose,
       notes,
       distance: 0,
-      locationPoints: [
+      location_points: [
         {
           latitude: startLatitude,
           longitude: startLongitude,
           timestamp: Date.now(),
         },
       ],
-      lastLatitude: startLatitude,
-      lastLongitude: startLongitude,
+      last_latitude: startLatitude,
+      last_longitude: startLongitude,
     };
 
     // Save active trip
@@ -179,7 +179,20 @@ export async function getActiveTrip(): Promise<ActiveTrip | null> {
     const activeTripJson = await AsyncStorage.getItem(ACTIVE_TRIP_KEY);
 
     if (activeTripJson) {
-      return JSON.parse(activeTripJson);
+      const trip = JSON.parse(activeTripJson);
+
+      // Check if trip is orphaned (tracking not active but trip exists)
+      // This can happen if app crashed or tracking stopped unexpectedly
+      const isActive = await isTrackingActive();
+      const tripAge = Date.now() - trip.start_time;
+      const oneHour = 60 * 60 * 1000;
+
+      if (!isActive && tripAge > oneHour) {
+        console.warn('[BackgroundTracking] Found orphaned trip older than 1 hour - trip may need recovery');
+        console.warn(`[BackgroundTracking] Trip started at ${new Date(trip.start_time).toLocaleString()}, distance: ${trip.distance.toFixed(2)} miles`);
+      }
+
+      return trip;
     }
 
     return null;
@@ -193,7 +206,7 @@ export async function isTrackingActive(): Promise<boolean> {
   try {
     const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
     return hasStarted;
-  } catch (error) {
+  } catch {
     return false;
   }
 }

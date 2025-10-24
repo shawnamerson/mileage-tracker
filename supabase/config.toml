@@ -1,0 +1,4 @@
+# Supabase Edge Functions Configuration
+
+[functions.verify-apple-receipt]
+verify_jwt = true

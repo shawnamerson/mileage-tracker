@@ -5,14 +5,14 @@ import {
   Switch,
   TouchableOpacity,
   Alert,
-  ActivityIndicator,
   Modal,
   View,
   TextInput,
 } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { LoadingAnimation, LoadingSpinner } from '@/components/LoadingAnimation';
+import { TripDiagnostic } from '@/components/TripDiagnostic';
 import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
 import {
   startAutoTracking,
@@ -34,28 +34,17 @@ import {
   getAllRates,
   setRateForYear,
   getRateForYear,
+  MileageRate,
 } from '@/services/mileageRateService';
-import { MileageRate } from '@/services/database';
 import {
   exportTripsToCSV,
   exportTripsToJSON,
   exportTaxSummary,
 } from '@/services/exportService';
-import {
-  shareBackup,
-  restoreFromBackup,
-  getBackupMetadata,
-  setAutoBackup,
-  isAutoBackupEnabled,
-  BackupMetadata,
-  getBackupStatusMessage,
-  hasNeverBackedUp,
-} from '@/services/backupService';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@/contexts/AuthContext';
 import { getTrialDaysRemaining } from '@/services/authService';
 import { restorePurchases } from '@/services/subscriptionService';
-import { router } from 'expo-router';
 
 export default function SettingsScreen() {
   const colors = useColors();
@@ -64,16 +53,13 @@ export default function SettingsScreen() {
   const [exporting, setExporting] = useState(false);
   const [autoTrackingEnabled, setAutoTrackingEnabled] = useState(false);
   const [autoTrackingActive, setAutoTrackingActive] = useState(false);
-  const [autoBackupEnabled, setAutoBackupEnabledState] = useState(false);
   const [notificationsEnabled, setNotificationsEnabledState] = useState(false);
-  const [backupMetadata, setBackupMetadata] = useState<BackupMetadata | null>(null);
-  const [backupStatusMessage, setBackupStatusMessage] = useState<string>('');
-  const [neverBackedUp, setNeverBackedUp] = useState(false);
   const [defaultPurpose, setDefaultPurposeState] = useState<
     'business' | 'personal' | 'medical' | 'charity' | 'other'
   >('business');
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showQuickStart, setShowQuickStart] = useState(false);
+  const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [diagnosticInfo, setDiagnosticInfo] = useState({
     hasLocationPermission: false,
     hasBackgroundPermission: false,
@@ -90,38 +76,52 @@ export default function SettingsScreen() {
   useFocusEffect(
     React.useCallback(() => {
       loadSettings();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
   );
 
   const loadSettings = async () => {
     try {
-      const enabled = await isAutoTrackingEnabled();
-      const active = await isAutoTrackingActive();
-      const purpose = await getDefaultPurpose();
-      const backupEnabled = await isAutoBackupEnabled();
-      const metadata = await getBackupMetadata();
-      const notifEnabled = await areNotificationsEnabled();
-      const rates = await getAllRates();
-      const backupStatus = await getBackupStatusMessage();
-      const noBackup = await hasNeverBackedUp();
+      console.log('[Settings] Loading settings...');
 
-      setAutoTrackingEnabled(enabled);
-      setAutoTrackingActive(active);
-      setDefaultPurposeState(purpose);
-      setAutoBackupEnabledState(backupEnabled);
-      setBackupMetadata(metadata);
-      setNotificationsEnabledState(notifEnabled);
-      setMileageRates(rates);
-      setBackupStatusMessage(backupStatus);
-      setNeverBackedUp(noBackup);
+      // Add timeout protection for Expo Go and slow connections
+      const settingsPromise = (async () => {
+        const enabled = await isAutoTrackingEnabled();
+        const active = await isAutoTrackingActive();
+        const purpose = await getDefaultPurpose();
+        const notifEnabled = await areNotificationsEnabled();
+        const rates = await getAllRates();
 
-      // Initialize notifications on first load
-      await initializeNotifications();
+        setAutoTrackingEnabled(enabled);
+        setAutoTrackingActive(active);
+        setDefaultPurposeState(purpose);
+        setNotificationsEnabledState(notifEnabled);
+        setMileageRates(rates);
 
-      // Load diagnostic info
-      await loadDiagnosticInfo();
+        // Initialize notifications on first load
+        await initializeNotifications();
+
+        // Load diagnostic info
+        await loadDiagnosticInfo();
+      })();
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          console.log('[Settings] Settings load timeout - using defaults');
+          reject(new Error('Timeout'));
+        }, 5000)
+      );
+
+      await Promise.race([settingsPromise, timeoutPromise]);
+      console.log('[Settings] Settings loaded successfully');
     } catch (error) {
-      console.error('Error loading settings:', error);
+      console.error('[Settings] Error loading settings:', error);
+      // Use default values on timeout or error
+      setAutoTrackingEnabled(false);
+      setAutoTrackingActive(false);
+      setDefaultPurposeState('business');
+      setNotificationsEnabledState(false);
+      setMileageRates([]);
     } finally {
       setLoading(false);
     }
@@ -242,80 +242,6 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleCreateBackup = async () => {
-    setExporting(true);
-    try {
-      await shareBackup();
-      await loadSettings(); // Reload to update backup metadata
-      Alert.alert('Success', 'Backup created and ready to share');
-    } catch (error) {
-      console.error('Error creating backup:', error);
-      Alert.alert('Error', 'Failed to create backup');
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const handleRestoreBackup = async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/json',
-        copyToCacheDirectory: true,
-      });
-
-      if (result.canceled) {
-        return;
-      }
-
-      const fileUri = result.assets[0].uri;
-
-      Alert.alert(
-        'Restore Backup',
-        'This will import trips from your backup file. Existing trips will not be deleted.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Restore',
-            onPress: async () => {
-              setExporting(true);
-              try {
-                const importedCount = await restoreFromBackup(fileUri, 'merge');
-                Alert.alert(
-                  'Success',
-                  `Restored ${importedCount} trips from backup`
-                );
-              } catch (error) {
-                console.error('Error restoring backup:', error);
-                Alert.alert('Error', 'Failed to restore backup. Please check the file format.');
-              } finally {
-                setExporting(false);
-              }
-            },
-          },
-        ]
-      );
-    } catch (error) {
-      console.error('Error selecting backup file:', error);
-      Alert.alert('Error', 'Failed to select backup file');
-    }
-  };
-
-  const handleToggleAutoBackup = async (value: boolean) => {
-    try {
-      await setAutoBackup(value);
-      setAutoBackupEnabledState(value);
-      Alert.alert(
-        value ? 'Auto-Backup Enabled' : 'Auto-Backup Disabled',
-        value
-          ? 'Your trips will be automatically backed up weekly'
-          : 'Automatic backup has been disabled'
-      );
-    } catch (error) {
-      console.error('Error toggling auto-backup:', error);
-      Alert.alert('Error', 'Failed to toggle auto-backup');
-    }
-  };
-
   const handleToggleNotifications = async (value: boolean) => {
     try {
       await setNotificationsEnabled(value);
@@ -374,14 +300,17 @@ export default function SettingsScreen() {
   if (loading) {
     return (
       <ThemedView style={styles.container}>
-        <ActivityIndicator size="large" />
+        <LoadingAnimation text="Loading settings..." />
       </ThemedView>
     );
   }
 
   return (
     <>
-      <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
+      <ScrollView
+        style={[styles.container, { backgroundColor: colors.background }]}
+        showsVerticalScrollIndicator={false}
+      >
         <ThemedView style={styles.header}>
           <ThemedText type="title">Settings</ThemedText>
           <ThemedText style={[styles.subtitle, { color: colors.textSecondary }]}>Configure automatic trip tracking</ThemedText>
@@ -570,13 +499,13 @@ export default function SettingsScreen() {
                 <ThemedView style={styles.diagnosticRow}>
                   <ThemedText style={styles.diagnosticLabel}>From:</ThemedText>
                   <ThemedText style={styles.diagnosticValue} numberOfLines={1}>
-                    {diagnosticInfo.activeTrip.startLocation}
+                    {diagnosticInfo.activeTrip.start_location}
                   </ThemedText>
                 </ThemedView>
                 <ThemedView style={styles.diagnosticRow}>
                   <ThemedText style={styles.diagnosticLabel}>Duration:</ThemedText>
                   <ThemedText style={styles.diagnosticValue}>
-                    {Math.floor((Date.now() - diagnosticInfo.activeTrip.startTime) / 60000)} min
+                    {Math.floor((Date.now() - diagnosticInfo.activeTrip.start_time) / 60000)} min
                   </ThemedText>
                 </ThemedView>
               </>
@@ -685,15 +614,15 @@ export default function SettingsScreen() {
             <ThemedView style={styles.infoItem}>
               <ThemedText style={styles.infoLabel}>• Battery Impact:</ThemedText>
               <ThemedText style={styles.infoText}>
-                Location checked every 10 seconds or 50 meters
+                Location checked every 5 seconds or 20 meters
               </ThemedText>
             </ThemedView>
           </ThemedView>
 
           <ThemedView style={[styles.warningSection, { backgroundColor: colors.surface, borderColor: colors.warning }]}>
             <ThemedText style={[styles.warningText, { color: colors.textSecondary }]}>
-              ⚠️ Auto-tracking requires background location access. Make sure to enable "Always
-              Allow" in your device's location permissions.
+              ⚠️ Auto-tracking requires background location access. Make sure to enable &quot;Always
+              Allow&quot; in your device&apos;s location permissions.
             </ThemedText>
           </ThemedView>
         </>
@@ -713,7 +642,7 @@ export default function SettingsScreen() {
           disabled={exporting}
         >
           {exporting ? (
-            <ActivityIndicator color="#fff" size="small" />
+            <LoadingSpinner color="#fff" size={20} />
           ) : (
             <ThemedText style={[styles.buttonText, { color: colors.textInverse }]}>Export as CSV</ThemedText>
           )}
@@ -725,7 +654,7 @@ export default function SettingsScreen() {
           disabled={exporting}
         >
           {exporting ? (
-            <ActivityIndicator color={colors.primary} size="small" />
+            <LoadingSpinner color={colors.primary} size={20} />
           ) : (
             <ThemedText style={[styles.secondaryButtonText, { color: colors.primary }]}>Export as JSON</ThemedText>
           )}
@@ -737,10 +666,26 @@ export default function SettingsScreen() {
           disabled={exporting}
         >
           {exporting ? (
-            <ActivityIndicator color={colors.primary} size="small" />
+            <LoadingSpinner color={colors.primary} size={20} />
           ) : (
             <ThemedText style={[styles.secondaryButtonText, { color: colors.primary }]}>Export Tax Summary</ThemedText>
           )}
+        </TouchableOpacity>
+      </ThemedView>
+
+      <ThemedView style={[styles.section, { backgroundColor: colors.surface }]}>
+        <ThemedText type="subtitle" style={styles.sectionTitle}>
+          🔍 Trip Diagnostic
+        </ThemedText>
+        <ThemedText style={[styles.sectionDescription, { color: colors.textSecondary }]}>
+          Check trip status, queue, and AsyncStorage
+        </ThemedText>
+
+        <TouchableOpacity
+          style={[styles.button, styles.secondaryButton, { borderColor: colors.primary }]}
+          onPress={() => setShowDiagnostic(true)}
+        >
+          <ThemedText style={[styles.secondaryButtonText, { color: colors.primary }]}>Run Diagnostic</ThemedText>
         </TouchableOpacity>
       </ThemedView>
 
@@ -779,87 +724,6 @@ export default function SettingsScreen() {
         </ThemedView>
       </ThemedView>
 
-      <ThemedView style={[styles.section, { backgroundColor: colors.surface }]}>
-        <ThemedText type="subtitle" style={styles.sectionTitle}>
-          Backup & Restore
-        </ThemedText>
-        <ThemedText style={[styles.sectionDescription, { color: colors.textSecondary }]}>
-          Keep your trip data safe for new devices
-        </ThemedText>
-
-        {neverBackedUp ? (
-          <ThemedView style={[styles.warningBox, { backgroundColor: colors.surfaceLight, borderLeftColor: colors.warning }]}>
-            <ThemedText style={[styles.warningTitle, { color: colors.warning }]}>⚠️ No Backup Yet</ThemedText>
-            <ThemedText style={[styles.backupWarningText, { color: colors.textSecondary }]}>
-              Create a backup and save it to your cloud storage (iCloud, Google Drive, etc.). If you get a new phone, you can restore all your trips from this backup.
-            </ThemedText>
-          </ThemedView>
-        ) : (
-          <ThemedView style={[styles.backupStatusBox, { backgroundColor: colors.surfaceLight, borderLeftColor: colors.success }]}>
-            <ThemedText style={[styles.backupStatusLabel, { color: colors.textSecondary }]}>Backup Status:</ThemedText>
-            <ThemedText style={[styles.backupStatusValue, { color: colors.success }]}>{backupStatusMessage}</ThemedText>
-            {backupMetadata && (
-              <ThemedText style={[styles.backupTripCount, { color: colors.textSecondary }]}>
-                {backupMetadata.totalTrips} trips backed up
-              </ThemedText>
-            )}
-          </ThemedView>
-        )}
-
-        <ThemedView style={styles.settingRow}>
-          <ThemedView style={styles.settingInfo}>
-            <ThemedText type="defaultSemiBold">Auto-Backup</ThemedText>
-            <ThemedText style={[styles.settingDescription, { color: colors.textSecondary }]}>
-              Automatically backup weekly
-            </ThemedText>
-          </ThemedView>
-          <Switch
-            value={autoBackupEnabled}
-            onValueChange={handleToggleAutoBackup}
-            disabled={exporting}
-          />
-        </ThemedView>
-
-        <TouchableOpacity
-          style={[styles.button, { marginTop: 16, backgroundColor: colors.primary }]}
-          onPress={handleCreateBackup}
-          disabled={exporting}
-        >
-          {exporting ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <ThemedText style={[styles.buttonText, { color: colors.textInverse }]}>Create Backup Now</ThemedText>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.secondaryButton, { borderColor: colors.primary }]}
-          onPress={handleRestoreBackup}
-          disabled={exporting}
-        >
-          {exporting ? (
-            <ActivityIndicator color={colors.primary} size="small" />
-          ) : (
-            <ThemedText style={[styles.secondaryButtonText, { color: colors.primary }]}>Restore from Backup</ThemedText>
-          )}
-        </TouchableOpacity>
-
-        <ThemedView style={[styles.restoreInfoBox, { backgroundColor: colors.surfaceLight, borderColor: colors.info }]}>
-          <ThemedText style={[styles.restoreInfoTitle, { color: colors.text }]}>📱 New Device Setup</ThemedText>
-          <ThemedText style={[styles.restoreInfoText, { color: colors.textSecondary }]}>
-            1. Download your backup file from cloud storage{'\n'}
-            2. Tap "Restore from Backup" above{'\n'}
-            3. Select your backup file{'\n'}
-            4. All trips will be imported
-          </ThemedText>
-        </ThemedView>
-      </ThemedView>
-
-      <ThemedView style={[styles.infoSection, { backgroundColor: colors.surface }]}>
-        <ThemedText style={[styles.infoText, { color: colors.textSecondary }]}>
-          💡 Tip: Export your data regularly and save backups to cloud storage (iCloud, Google Drive, etc.) for maximum safety.
-        </ThemedText>
-      </ThemedView>
       </ScrollView>
 
       {/* Quick Start Guide Modal */}
@@ -877,18 +741,21 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.modalContent}>
+          <ScrollView
+            style={styles.modalContent}
+            showsVerticalScrollIndicator={false}
+          >
             <ThemedView style={styles.guideSection}>
               <ThemedText style={styles.guideStepNumber}>Step 1</ThemedText>
               <ThemedText type="subtitle" style={styles.guideTitle}>
                 Enable Auto-Tracking
               </ThemedText>
               <ThemedText style={styles.guideText}>
-                Toggle "Automatic Tracking" ON in Settings. This allows the app to detect when you start driving.
+                Toggle &quot;Automatic Tracking&quot; ON in Settings. This allows the app to detect when you start driving.
               </ThemedText>
               <ThemedView style={styles.guideTip}>
                 <ThemedText style={styles.guideTipText}>
-                  💡 You'll be asked to grant location permissions. Choose "Always Allow" for background tracking.
+                  💡 You&apos;ll be asked to grant location permissions. Choose &quot;Always Allow&quot; for background tracking.
                 </ThemedText>
               </ThemedView>
             </ThemedView>
@@ -909,10 +776,10 @@ export default function SettingsScreen() {
             <ThemedView style={styles.guideSection}>
               <ThemedText style={styles.guideStepNumber}>Step 3</ThemedText>
               <ThemedText type="subtitle" style={styles.guideTitle}>
-                Verify It's Working
+                Verify It&apos;s Working
               </ThemedText>
               <ThemedText style={styles.guideText}>
-                Use the "System Status & Diagnostics" section in Settings to check:{'\n\n'}
+                Use the &quot;System Status &amp; Diagnostics&quot; section in Settings to check:{'\n\n'}
                 • Auto-Tracking: ✓ Enabled{'\n'}
                 • Location Permission: ✓ Granted{'\n'}
                 • Background Permission: ✓ Always Allowed{'\n'}
@@ -928,7 +795,7 @@ export default function SettingsScreen() {
                 • <ThemedText type="defaultSemiBold">Start:</ThemedText> Speed exceeds 5 mph{'\n'}
                 • <ThemedText type="defaultSemiBold">End:</ThemedText> Stopped for 3 minutes{'\n'}
                 • <ThemedText type="defaultSemiBold">Minimum:</ThemedText> No minimum - all trips saved{'\n'}
-                • <ThemedText type="defaultSemiBold">Purpose:</ThemedText> Set to "Business" by default{'\n'}
+                • <ThemedText type="defaultSemiBold">Purpose:</ThemedText> Set to &quot;Business&quot; by default{'\n'}
                 • <ThemedText type="defaultSemiBold">Appears:</ThemedText> Immediately in Dashboard & History
               </ThemedText>
             </ThemedView>
@@ -940,12 +807,12 @@ export default function SettingsScreen() {
               <ThemedText style={styles.guideText}>
                 <ThemedText type="defaultSemiBold">Trip not appearing?</ThemedText>{'\n'}
                 • Check if trip is still active (wait 3 min after stopping){'\n'}
-                • Verify permissions are set to "Always Allow"{'\n'}
+                • Verify permissions are set to &quot;Always Allow&quot;{'\n'}
                 • Ensure you exceeded 5 mph during the drive{'\n'}
-                • Check "System Status & Diagnostics" in Settings{'\n\n'}
+                • Check &quot;System Status &amp; Diagnostics&quot; in Settings{'\n\n'}
 
                 <ThemedText type="defaultSemiBold">Battery concerns?</ThemedText>{'\n'}
-                • Location checks every 10 seconds or 50 meters{'\n'}
+                • Location checks every 5 seconds or 20 meters{'\n'}
                 • Modern phones handle this efficiently{'\n'}
                 • iOS optimizes background location services
               </ThemedText>
@@ -959,6 +826,24 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           </ScrollView>
         </ThemedView>
+      </Modal>
+
+      {/* Trip Diagnostic Modal */}
+      <Modal
+        visible={showDiagnostic}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowDiagnostic(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: colors.background }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+            <ThemedText type="title">🔍 Trip Diagnostic</ThemedText>
+            <TouchableOpacity onPress={() => setShowDiagnostic(false)}>
+              <ThemedText style={{fontSize: 32, fontWeight: '300'}}>×</ThemedText>
+            </TouchableOpacity>
+          </View>
+          <TripDiagnostic />
+        </View>
       </Modal>
 
       {/* Mileage Rate Edit Modal */}

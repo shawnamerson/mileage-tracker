@@ -24,7 +24,7 @@ import { useAuth } from '@/contexts/AuthContext';
 export default function PaywallScreen() {
   const colors = useColors();
   const shadows = useShadows();
-  const { profile, refreshProfile } = useAuth();
+  const { refreshProfile } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState(false);

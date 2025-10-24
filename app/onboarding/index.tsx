@@ -18,8 +18,9 @@ import {
   startAutoTracking,
   setDefaultPurpose,
 } from '@/services/autoTracking';
+import { requestNotificationPermissions } from '@/services/notificationService';
 
-type OnboardingStep = 'welcome' | 'vehicle' | 'mileage' | 'complete';
+type OnboardingStep = 'welcome' | 'vehicle' | 'mileage' | 'permissions' | 'notifications' | 'complete';
 
 export default function OnboardingScreen() {
   const [step, setStep] = useState<OnboardingStep>('welcome');
@@ -49,6 +50,10 @@ export default function OnboardingScreen() {
         Alert.alert('Invalid Mileage', 'Please enter a valid mileage number');
         return;
       }
+      setStep('permissions');
+    } else if (step === 'permissions') {
+      setStep('notifications');
+    } else if (step === 'notifications') {
       await handleComplete();
     }
   };
@@ -58,6 +63,58 @@ export default function OnboardingScreen() {
       setStep('welcome');
     } else if (step === 'mileage') {
       setStep('vehicle');
+    } else if (step === 'permissions') {
+      setStep('mileage');
+    } else if (step === 'notifications') {
+      setStep('permissions');
+    }
+  };
+
+  const handleEnableLocation = async () => {
+    setLoading(true);
+    try {
+      console.log('[Onboarding] Requesting location permissions...');
+      const autoTrackingStarted = await startAutoTracking();
+
+      if (autoTrackingStarted) {
+        console.log('[Onboarding] ✅ Auto-tracking enabled successfully');
+        setStep('notifications');
+      } else {
+        console.log('[Onboarding] ⚠️ Auto-tracking failed to start');
+        Alert.alert(
+          'Permissions Required',
+          'Location permissions are needed for automatic trip tracking. You can enable this later in Settings.',
+          [
+            {
+              text: 'Skip',
+              style: 'cancel',
+              onPress: () => setStep('notifications')
+            },
+            {
+              text: 'Try Again',
+              onPress: handleEnableLocation
+            }
+          ]
+        );
+      }
+    } catch (error) {
+      console.error('Error enabling location:', error);
+      Alert.alert('Error', 'Failed to enable location permissions');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEnableNotifications = async () => {
+    setLoading(true);
+    try {
+      console.log('[Onboarding] Requesting notification permissions...');
+      await requestNotificationPermissions();
+      console.log('[Onboarding] ✅ Notification permissions requested');
+      await handleComplete();
+    } catch (error) {
+      console.error('Error enabling notifications:', error);
+      await handleComplete();
     }
   };
 
@@ -72,26 +129,11 @@ export default function OnboardingScreen() {
         make: vehicleMake.trim() || undefined,
         model: vehicleModel.trim() || undefined,
         year: vehicleYear.trim() || undefined,
-        initialMileage: mileage,
+        initial_mileage: mileage,
       });
 
       // Set default trip purpose to business
       await setDefaultPurpose('business');
-
-      // Enable auto-tracking by default
-      console.log('[Onboarding] Starting auto-tracking...');
-      const autoTrackingStarted = await startAutoTracking();
-
-      if (autoTrackingStarted) {
-        console.log('[Onboarding] ✅ Auto-tracking enabled successfully');
-      } else {
-        console.log('[Onboarding] ⚠️ Auto-tracking failed to start - may need to grant permissions manually');
-        Alert.alert(
-          'Permissions Needed',
-          'Please grant location permissions in the next screen to enable automatic trip tracking.',
-          [{ text: 'OK' }]
-        );
-      }
 
       // Mark onboarding as complete
       await completeOnboarding();
@@ -148,7 +190,7 @@ export default function OnboardingScreen() {
             </View>
 
             <ThemedText style={styles.subtitle}>
-              Let's set up your first vehicle
+              Let&apos;s set up your first vehicle
             </ThemedText>
           </View>
         </ScrollView>
@@ -236,7 +278,7 @@ export default function OnboardingScreen() {
             </ThemedText>
 
             <ThemedText style={styles.description}>
-              Enter your car's current odometer reading. This helps track total miles driven.
+              Enter your car&apos;s current odometer reading. This helps track total miles driven.
             </ThemedText>
 
             <View style={styles.mileageInputContainer}>
@@ -257,7 +299,7 @@ export default function OnboardingScreen() {
             <View style={styles.tipBox}>
               <ThemedText style={styles.tipTitle}>💡 Tip</ThemedText>
               <ThemedText style={styles.tipText}>
-                Check your car's dashboard for the odometer reading. It shows the total miles your vehicle has traveled.
+                Check your car&apos;s dashboard for the odometer reading. It shows the total miles your vehicle has traveled.
               </ThemedText>
             </View>
           </View>
@@ -275,7 +317,146 @@ export default function OnboardingScreen() {
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <ThemedText style={styles.primaryButtonText}>Complete Setup</ThemedText>
+              <ThemedText style={styles.primaryButtonText}>Next</ThemedText>
+            )}
+          </TouchableOpacity>
+        </View>
+      </ThemedView>
+    );
+  }
+
+  if (step === 'permissions') {
+    return (
+      <ThemedView style={styles.container}>
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.content}>
+            <ThemedText style={styles.permissionIcon}>📍</ThemedText>
+            <ThemedText type="title" style={styles.title}>
+              Enable Auto-Tracking
+            </ThemedText>
+
+            <ThemedText style={styles.description}>
+              MileMate uses your location to automatically track trips when you drive.
+            </ThemedText>
+
+            <View style={styles.featureList}>
+              <View style={styles.feature}>
+                <ThemedText style={styles.featureIcon}>✅</ThemedText>
+                <ThemedText style={styles.featureText}>
+                  Detects when you start driving (5+ mph)
+                </ThemedText>
+              </View>
+
+              <View style={styles.feature}>
+                <ThemedText style={styles.featureIcon}>✅</ThemedText>
+                <ThemedText style={styles.featureText}>
+                  Tracks distance automatically in the background
+                </ThemedText>
+              </View>
+
+              <View style={styles.feature}>
+                <ThemedText style={styles.featureIcon}>✅</ThemedText>
+                <ThemedText style={styles.featureText}>
+                  Stops after 3 minutes of being stationary
+                </ThemedText>
+              </View>
+
+              <View style={styles.feature}>
+                <ThemedText style={styles.featureIcon}>✅</ThemedText>
+                <ThemedText style={styles.featureText}>
+                  No need to remember to start or stop
+                </ThemedText>
+              </View>
+            </View>
+
+            <View style={styles.tipBox}>
+              <ThemedText style={styles.tipTitle}>🔒 Privacy</ThemedText>
+              <ThemedText style={styles.tipText}>
+                Your location data is stored securely and never shared. It&apos;s only used to calculate trip distances.
+              </ThemedText>
+            </View>
+          </View>
+        </ScrollView>
+
+        <View style={styles.footer}>
+          <TouchableOpacity style={styles.secondaryButton} onPress={handleBack}>
+            <ThemedText style={styles.secondaryButtonText}>Back</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={handleEnableLocation}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <ThemedText style={styles.primaryButtonText}>Enable Location</ThemedText>
+            )}
+          </TouchableOpacity>
+        </View>
+      </ThemedView>
+    );
+  }
+
+  if (step === 'notifications') {
+    return (
+      <ThemedView style={styles.container}>
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.content}>
+            <ThemedText style={styles.permissionIcon}>🔔</ThemedText>
+            <ThemedText type="title" style={styles.title}>
+              Enable Notifications
+            </ThemedText>
+
+            <ThemedText style={styles.description}>
+              Get notified when trips are automatically saved so you stay informed.
+            </ThemedText>
+
+            <View style={styles.featureList}>
+              <View style={styles.feature}>
+                <ThemedText style={styles.featureIcon}>✅</ThemedText>
+                <ThemedText style={styles.featureText}>
+                  Trip completed confirmations
+                </ThemedText>
+              </View>
+
+              <View style={styles.feature}>
+                <ThemedText style={styles.featureIcon}>✅</ThemedText>
+                <ThemedText style={styles.featureText}>
+                  Daily/weekly mileage summaries
+                </ThemedText>
+              </View>
+
+              <View style={styles.feature}>
+                <ThemedText style={styles.featureIcon}>✅</ThemedText>
+                <ThemedText style={styles.featureText}>
+                  Reminders to review uncategorized trips
+                </ThemedText>
+              </View>
+            </View>
+
+            <View style={styles.tipBox}>
+              <ThemedText style={styles.tipTitle}>💡 Optional</ThemedText>
+              <ThemedText style={styles.tipText}>
+                You can skip this step and enable notifications later in Settings.
+              </ThemedText>
+            </View>
+          </View>
+        </ScrollView>
+
+        <View style={styles.footer}>
+          <TouchableOpacity style={styles.secondaryButton} onPress={() => handleComplete()}>
+            <ThemedText style={styles.secondaryButtonText}>Skip</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={handleEnableNotifications}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <ThemedText style={styles.primaryButtonText}>Enable Notifications</ThemedText>
             )}
           </TouchableOpacity>
         </View>
@@ -336,6 +517,11 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     textAlign: 'center',
   },
+  permissionIcon: {
+    fontSize: 64,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
   subtitle: {
     fontSize: 16,
     textAlign: 'center',
@@ -355,11 +541,15 @@ const styles = StyleSheet.create({
   },
   feature: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 16,
+    paddingVertical: 2,
   },
   featureIcon: {
     fontSize: 32,
+    lineHeight: 40,
+    paddingTop: 4,
+    includeFontPadding: false,
   },
   featureText: {
     fontSize: 16,
@@ -428,7 +618,9 @@ const styles = StyleSheet.create({
   },
   footer: {
     flexDirection: 'row',
-    padding: 16,
+    paddingTop: 16,
+    paddingHorizontal: 16,
+    paddingBottom: 32,
     gap: 12,
     borderTopWidth: 1,
     borderTopColor: '#eee',

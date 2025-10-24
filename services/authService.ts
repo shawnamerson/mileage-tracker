@@ -40,7 +40,6 @@ export async function signInWithApple(): Promise<AuthResult> {
     const { data, error } = await supabase.auth.signInWithIdToken({
       provider: 'apple',
       token: credential.identityToken!,
-      nonce: credential.nonce,
     });
 
     if (error) {
