@@ -12,10 +12,37 @@ import {
   type SyncError,
   type QueuedOperation,
 } from './offlineQueue';
+import { withTimeout, withTimeoutFallback, TIMEOUTS, TimeoutError } from '@/utils/timeout';
 
 const LAST_SYNC_KEY = 'last_sync_timestamp';
+const SYNC_STATUS_KEY = 'sync_status';
 const MAX_RETRY_ATTEMPTS = 3;
 const INITIAL_RETRY_DELAY = 1000; // 1 second
+
+// Prevent concurrent sync operations
+let isSyncInProgress = false;
+let deferredSyncTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// Sync status tracking
+export interface SyncStatus {
+  isSyncing: boolean;
+  lastSyncTime: number | null;
+  lastSyncSuccess: boolean;
+  lastSyncError: string | null;
+  tripsUploaded: number;
+  tripsDownloaded: number;
+  totalErrors: number;
+}
+
+let syncStatus: SyncStatus = {
+  isSyncing: false,
+  lastSyncTime: null,
+  lastSyncSuccess: false,
+  lastSyncError: null,
+  tripsUploaded: 0,
+  tripsDownloaded: 0,
+  totalErrors: 0,
+};
 
 // Re-export for backward compatibility
 export { SyncErrorType, addToQueue, getQueueStatus, clearFailedOperations };
@@ -66,6 +93,41 @@ function cloudTripToTrip(cloudTrip: CloudTrip): Trip {
     is_deleted: cloudTrip.is_deleted,
     deleted_at: cloudTrip.deleted_at || undefined,
   };
+}
+
+/**
+ * Get current sync status
+ */
+export function getSyncStatus(): SyncStatus {
+  return { ...syncStatus };
+}
+
+/**
+ * Update sync status
+ */
+async function updateSyncStatus(updates: Partial<SyncStatus>) {
+  syncStatus = { ...syncStatus, ...updates };
+
+  // Persist to AsyncStorage
+  try {
+    await AsyncStorage.setItem(SYNC_STATUS_KEY, JSON.stringify(syncStatus));
+  } catch (error) {
+    console.error('[Sync] Failed to persist sync status:', error);
+  }
+}
+
+/**
+ * Load sync status from storage
+ */
+async function loadSyncStatus() {
+  try {
+    const stored = await AsyncStorage.getItem(SYNC_STATUS_KEY);
+    if (stored) {
+      syncStatus = JSON.parse(stored);
+    }
+  } catch (error) {
+    console.error('[Sync] Failed to load sync status:', error);
+  }
 }
 
 /**
@@ -472,6 +534,19 @@ export async function syncTrips(): Promise<{
   queueProcessed: number;
   errors: string[];
 }> {
+  // Prevent concurrent sync operations
+  if (isSyncInProgress) {
+    console.log('[Sync] ⚠️ Sync already in progress, skipping duplicate sync');
+    return {
+      uploaded: 0,
+      downloaded: 0,
+      queueProcessed: 0,
+      errors: ['Sync already in progress'],
+    };
+  }
+
+  isSyncInProgress = true;
+  await updateSyncStatus({ isSyncing: true, lastSyncError: null });
   const errors: string[] = [];
 
   try {
@@ -479,7 +554,18 @@ export async function syncTrips(): Promise<{
 
     // 1. First, process any queued operations from previous failed syncs
     console.log('[Sync] Processing offline queue...');
-    const { processed: queueProcessed, failed: queueFailed } = await processQueue();
+    const { processed: queueProcessed, failed: queueFailed} = await withTimeout(
+      processQueue(),
+      TIMEOUTS.NORMAL,
+      'Process offline queue'
+    ).catch((error) => {
+      if (error instanceof TimeoutError) {
+        console.warn('[Sync] Queue processing timed out, continuing with sync');
+        errors.push('Queue processing timed out');
+        return { processed: 0, failed: 0 };
+      }
+      throw error;
+    });
 
     if (queueFailed > 0) {
       errors.push(`${queueFailed} queued operations failed after retries`);
@@ -487,7 +573,18 @@ export async function syncTrips(): Promise<{
 
     // 2. Upload all local trips to cloud
     console.log('[Sync] Uploading local trips...');
-    const { success: uploaded, failed: uploadFailed } = await uploadAllTrips();
+    const { success: uploaded, failed: uploadFailed } = await withTimeout(
+      uploadAllTrips(),
+      TIMEOUTS.LONG,
+      'Upload local trips'
+    ).catch((error) => {
+      if (error instanceof TimeoutError) {
+        console.warn('[Sync] Upload timed out after 30s');
+        errors.push('Upload timed out - trips queued for later');
+        return { success: 0, failed: 0 };
+      }
+      throw error;
+    });
 
     if (uploadFailed > 0) {
       errors.push(`${uploadFailed} trips failed to upload (added to queue)`);
@@ -495,7 +592,18 @@ export async function syncTrips(): Promise<{
 
     // 3. Download all cloud trips
     console.log('[Sync] Downloading cloud trips...');
-    const cloudTrips = await downloadTrips();
+    const cloudTrips = await withTimeout(
+      downloadTrips(),
+      TIMEOUTS.LONG,
+      'Download cloud trips'
+    ).catch((error) => {
+      if (error instanceof TimeoutError) {
+        console.warn('[Sync] Download timed out after 30s');
+        errors.push('Download timed out - will retry next sync');
+        return [];
+      }
+      throw error;
+    });
 
     // 4. Update last sync timestamp
     await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
@@ -509,6 +617,17 @@ export async function syncTrips(): Promise<{
       `[Sync] ✅ Sync complete: ${uploaded} uploaded, ${cloudTrips.length} in cloud, ${queueProcessed} from queue`
     );
 
+    // Update sync status on success
+    await updateSyncStatus({
+      isSyncing: false,
+      lastSyncTime: Date.now(),
+      lastSyncSuccess: errors.length === 0,
+      lastSyncError: errors.length > 0 ? errors.join('; ') : null,
+      tripsUploaded: uploaded,
+      tripsDownloaded: cloudTrips.length,
+      totalErrors: errors.length,
+    });
+
     return {
       uploaded,
       downloaded: cloudTrips.length,
@@ -520,12 +639,24 @@ export async function syncTrips(): Promise<{
     console.error('[Sync] Error during sync:', syncError.message);
     errors.push(`Sync failed: ${syncError.message}`);
 
+    // Update sync status on error
+    await updateSyncStatus({
+      isSyncing: false,
+      lastSyncTime: Date.now(),
+      lastSyncSuccess: false,
+      lastSyncError: syncError.message,
+      totalErrors: errors.length,
+    });
+
     return {
       uploaded: 0,
       downloaded: 0,
       queueProcessed: 0,
       errors,
     };
+  } finally {
+    // Always reset the sync flag when done
+    isSyncInProgress = false;
   }
 }
 
@@ -621,6 +752,16 @@ export async function initializeSync(): Promise<void> {
 
     console.log('[Sync] Initializing sync for user:', user.email);
 
+    // Load sync status from storage
+    await loadSyncStatus();
+
+    // Cancel any pending deferred sync to prevent duplicates
+    if (deferredSyncTimeout) {
+      console.log('[Sync] Canceling previous deferred sync');
+      clearTimeout(deferredSyncTimeout);
+      deferredSyncTimeout = null;
+    }
+
     // Only process offline queue on startup (fast)
     // This ensures failed operations get retried without blocking the UI
     const queueStatus = await getQueueStatus();
@@ -635,8 +776,9 @@ export async function initializeSync(): Promise<void> {
 
     // Defer full sync to avoid blocking startup
     // Run full sync 5 seconds after app starts (when user is already in the app)
-    setTimeout(() => {
+    deferredSyncTimeout = setTimeout(() => {
       console.log('[Sync] Running deferred full sync...');
+      deferredSyncTimeout = null;
       syncTrips().catch((error) => {
         console.error('[Sync] Error in deferred sync:', error);
       });

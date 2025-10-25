@@ -12,28 +12,41 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { LoadingAnimation } from '@/components/LoadingAnimation';
 import { getAllTrips, deleteTrip, updateTrip, Trip } from '@/services/tripService';
+import { getLocalTrips, deleteLocalTrip, updateLocalTrip, LocalTrip } from '@/services/localDatabase';
+import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
 
 export default function HistoryScreen() {
   const colors = useColors();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [trips, setTrips] = useState<Trip[]>([]);
+  const [trips, setTrips] = useState<LocalTrip[]>([]);
   const [filter, setFilter] = useState<'all' | 'business' | 'personal'>('all');
   const [editModalVisible, setEditModalVisible] = useState(false);
-  const [editingTrip, setEditingTrip] = useState<Trip | null>(null);
+  const [editingTrip, setEditingTrip] = useState<LocalTrip | null>(null);
   const [editPurpose, setEditPurpose] = useState<'business' | 'personal' | 'medical' | 'charity' | 'other'>('business');
   const [editNotes, setEditNotes] = useState('');
 
   const purposes = ['business', 'personal', 'medical', 'charity', 'other'] as const;
 
   const loadTrips = async () => {
+    if (!user) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
     try {
-      console.log('[History] Loading trips...');
-      const allTrips = await getAllTrips();
-      console.log('[History] Loaded', allTrips.length, 'trips');
-      setTrips(allTrips);
+      console.log('[History] Loading from local SQLite...');
+
+      // Load from local database (fast, always available)
+      const localTrips = await getLocalTrips(user.id);
+
+      console.log('[History] ✅ Loaded from local SQLite:', localTrips.length, 'trips');
+
+      setTrips(localTrips);
     } catch (error) {
       console.error('[History] Error loading trips:', error);
       // Use empty array on error
@@ -44,10 +57,7 @@ export default function HistoryScreen() {
     }
   };
 
-  useEffect(() => {
-    loadTrips();
-  }, []);
-
+  // Remove redundant useEffect - useFocusEffect handles both initial load and focus
   useFocusEffect(
     React.useCallback(() => {
       loadTrips();
@@ -59,7 +69,7 @@ export default function HistoryScreen() {
     loadTrips();
   };
 
-  const handleEditTrip = (trip: Trip) => {
+  const handleEditTrip = (trip: LocalTrip) => {
     setEditingTrip(trip);
     setEditPurpose(trip.purpose);
     setEditNotes(trip.notes || '');
@@ -70,10 +80,20 @@ export default function HistoryScreen() {
     if (!editingTrip || !editingTrip.id) return;
 
     try {
-      await updateTrip(editingTrip.id, {
+      // Update in local database first
+      await updateLocalTrip(editingTrip.id, {
         purpose: editPurpose,
         notes: editNotes,
       });
+
+      // Also update in Supabase (in background, ignore errors)
+      updateTrip(editingTrip.id, {
+        purpose: editPurpose,
+        notes: editNotes,
+      }).catch(error => {
+        console.log('[History] Failed to update in Supabase (will sync later):', error.message);
+      });
+
       setEditModalVisible(false);
       setEditingTrip(null);
       loadTrips();
@@ -91,7 +111,15 @@ export default function HistoryScreen() {
         style: 'destructive',
         onPress: async () => {
           try {
-            await deleteTrip(id);
+            // Delete from local database first
+            await deleteLocalTrip(id);
+
+            // Also delete from Supabase (in background, ignore errors)
+            deleteTrip(id).catch(error => {
+              console.log('[History] Failed to delete from Supabase (will sync later):', error.message);
+            });
+
+            // Reload trips from local database
             loadTrips();
           } catch (error) {
             console.error('Error deleting trip:', error);

@@ -19,7 +19,19 @@ import {
   getBusinessDeductibleValueForCurrentMonth,
   getBusinessDeductibleValueForYear
 } from '@/services/tripService';
+import {
+  getLocalTripStats,
+  getLocalTrips,
+  getLocalTripStatsForToday,
+  getLocalTripStatsForCurrentMonth,
+  getLocalTripStatsForYear,
+  getLocalBusinessDeductibleForToday,
+  getLocalBusinessDeductibleForCurrentMonth,
+  getLocalBusinessDeductibleForYear,
+} from '@/services/localDatabase';
+import { getRateForYear } from '@/services/mileageRateService';
 import { getActiveVehicle, type Vehicle } from '@/services/vehicleService';
+import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Sharing from 'expo-sharing';
 import { Paths, File } from 'expo-file-system';
@@ -27,6 +39,7 @@ import { Colors, useColors, Spacing, BorderRadius, Typography } from '@/constant
 
 export default function StatsScreen() {
   const colors = useColors();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,11 +81,19 @@ export default function StatsScreen() {
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
 
   const loadData = async () => {
+    if (!user) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
     try {
-      console.log('[Stats] Starting to load data...');
+      console.log('[Stats] Loading from local SQLite...');
 
       const currentYear = new Date().getFullYear();
+      const ratePerMile = await getRateForYear(currentYear);
 
+      // Load from local database (fast, always available)
       const [
         tripStats,
         todayStatsData,
@@ -80,18 +101,23 @@ export default function StatsScreen() {
         yearStatsData,
         todayDeductibleData,
         monthDeductibleData,
-        yearDeductibleData,
-        activeVehicle
+        yearDeductibleData
       ] = await Promise.all([
-        getTripStats(),
-        getTripStatsForToday(),
-        getTripStatsForCurrentMonth(),
-        getTripStatsForYear(currentYear),
-        getBusinessDeductibleValueForToday(),
-        getBusinessDeductibleValueForCurrentMonth(),
-        getBusinessDeductibleValueForYear(currentYear),
-        getActiveVehicle()
+        getLocalTripStats(user.id),
+        getLocalTripStatsForToday(user.id),
+        getLocalTripStatsForCurrentMonth(user.id),
+        getLocalTripStatsForYear(user.id, currentYear),
+        getLocalBusinessDeductibleForToday(user.id, ratePerMile),
+        getLocalBusinessDeductibleForCurrentMonth(user.id, ratePerMile),
+        getLocalBusinessDeductibleForYear(user.id, currentYear, ratePerMile)
       ]);
+
+      // Load vehicle in background (don't block stats)
+      getActiveVehicle()
+        .then(vehicle => setVehicle(vehicle))
+        .catch(error => console.log('[Stats] Could not load vehicle:', error));
+
+      console.log('[Stats] ✅ Loaded from local SQLite');
 
       setStats(tripStats);
       setTodayStats(todayStatsData);
@@ -100,9 +126,7 @@ export default function StatsScreen() {
       setTodayDeductible(todayDeductibleData);
       setMonthDeductible(monthDeductibleData);
       setYearDeductible(yearDeductibleData);
-      setVehicle(activeVehicle);
       setError(null);
-      console.log('[Stats] Data loaded successfully');
     } catch (error) {
       console.error('[Stats] Error loading stats:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -130,10 +154,7 @@ export default function StatsScreen() {
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
+  // Load data when screen comes into focus
   useFocusEffect(
     React.useCallback(() => {
       loadData();
@@ -146,8 +167,10 @@ export default function StatsScreen() {
   };
 
   const exportToCSV = async () => {
+    if (!user) return;
+
     try {
-      const trips = await getAllTrips();
+      const trips = await getLocalTrips(user.id);
 
       if (trips.length === 0) {
         Alert.alert('No Data', 'No trips to export');

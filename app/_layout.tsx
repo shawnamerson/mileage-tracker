@@ -9,9 +9,11 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { isOnboardingCompleted } from '@/services/onboardingService';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { shouldShowPaywall, initializeIAP, cleanupIAP } from '@/services/subscriptionService';
-import { initializeSync } from '@/services/syncService';
 import { isAutoTrackingEnabled, isAutoTrackingActive, startAutoTracking } from '@/services/autoTracking';
+import { initLocalDatabase } from '@/services/localDatabase';
 import { LoadingAnimation } from '@/components/LoadingAnimation';
+import { withTimeoutFallback, TIMEOUTS } from '@/utils/timeout';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -23,10 +25,18 @@ function RootNavigator() {
   const { user, loading } = useAuth();
   const [isReady, setIsReady] = useState(false);
 
-  // Initialize IAP connection on app start
+  // Initialize local database and IAP on app start
   useEffect(() => {
-    // Wrap in try-catch to prevent crashes
-    const setupIAP = async () => {
+    const setup = async () => {
+      // Initialize local database first
+      try {
+        await initLocalDatabase();
+        console.log('[App] Local database initialized successfully');
+      } catch (error) {
+        console.error('[App] Failed to initialize local database:', error);
+      }
+
+      // Initialize IAP
       try {
         await initializeIAP();
         console.log('[App] IAP initialized successfully');
@@ -36,7 +46,7 @@ function RootNavigator() {
       }
     };
 
-    setupIAP();
+    setup();
 
     // Cleanup on unmount
     return () => {
@@ -47,18 +57,6 @@ function RootNavigator() {
       }
     };
   }, []);
-
-  // Initialize sync (process offline queue) when user is authenticated
-  useEffect(() => {
-    if (user) {
-      try {
-        initializeSync();
-        console.log('[App] Sync initialized - processing offline queue');
-      } catch (error) {
-        console.error('[App] Failed to initialize sync:', error);
-      }
-    }
-  }, [user]);
 
   // Restart auto-tracking if it was previously enabled
   useEffect(() => {
@@ -121,22 +119,15 @@ function RootNavigator() {
         if (user) {
           console.log('[App] User authenticated, checking onboarding status...');
 
-          // Add timeout protection for onboarding check (in case Supabase hangs)
-          let completed = false;
-          try {
-            const onboardingPromise = isOnboardingCompleted();
-            const timeoutPromise = new Promise<boolean>((resolve) =>
-              setTimeout(() => {
-                console.log('[App] Onboarding check timeout - assuming completed');
-                resolve(true); // Assume completed to avoid blocking
-              }, 5000)
-            );
-            completed = await Promise.race([onboardingPromise, timeoutPromise]);
-            console.log('[App] Onboarding completed:', completed);
-          } catch (error) {
-            console.error('[App] Error checking onboarding:', error);
-            completed = true; // Assume completed on error
-          }
+          // Check onboarding with timeout protection
+          const completed = await withTimeoutFallback(
+            isOnboardingCompleted(),
+            TIMEOUTS.QUICK,
+            'Onboarding check',
+            true, // Assume completed on timeout
+            (error) => console.warn('[App] Onboarding check timed out, assuming completed')
+          );
+          console.log('[App] Onboarding completed:', completed);
 
           if (!completed && !inOnboarding) {
             // Not completed onboarding - redirect to onboarding
@@ -144,23 +135,15 @@ function RootNavigator() {
             router.replace('/onboarding');
           } else if (completed) {
             console.log('[App] Checking paywall status...');
-            // Check if should show paywall (trial expired and no subscription)
-            // Add timeout protection for Expo Go/slow connections
-            let showPaywall = false;
-            try {
-              const paywallPromise = shouldShowPaywall();
-              const timeoutPromise = new Promise<boolean>((resolve) =>
-                setTimeout(() => {
-                  console.log('[App] Paywall check timeout - assuming no paywall');
-                  resolve(false);
-                }, 5000)
-              );
-              showPaywall = await Promise.race([paywallPromise, timeoutPromise]);
-              console.log('[App] Paywall check result:', showPaywall);
-            } catch (error) {
-              console.error('[App] Error checking paywall:', error);
-              showPaywall = false; // Assume no paywall on error
-            }
+            // Check if should show paywall with timeout protection
+            const showPaywall = await withTimeoutFallback(
+              shouldShowPaywall(),
+              TIMEOUTS.QUICK,
+              'Paywall check',
+              false, // Assume no paywall on timeout
+              (error) => console.warn('[App] Paywall check timed out, assuming no paywall')
+            );
+            console.log('[App] Paywall check result:', showPaywall);
 
             if (showPaywall && !inSubscription) {
               // Trial expired, redirect to paywall
@@ -188,7 +171,7 @@ function RootNavigator() {
     }
 
     handleNavigation();
-  }, [user, loading, segments]);
+  }, [user, loading]); // Removed 'segments' - only run on auth state changes
 
   if (!isReady || loading) {
     return (
@@ -223,8 +206,10 @@ const styles = StyleSheet.create({
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <RootNavigator />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

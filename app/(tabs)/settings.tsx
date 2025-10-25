@@ -7,7 +7,6 @@ import {
   Alert,
   Modal,
   View,
-  TextInput,
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -31,12 +30,6 @@ import { getActiveTrip, isTrackingActive } from '@/services/backgroundTracking';
 import * as Location from 'expo-location';
 import { getAllTrips } from '@/services/tripService';
 import {
-  getAllRates,
-  setRateForYear,
-  getRateForYear,
-  MileageRate,
-} from '@/services/mileageRateService';
-import {
   exportTripsToCSV,
   exportTripsToJSON,
   exportTaxSummary,
@@ -45,6 +38,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@/contexts/AuthContext';
 import { getTrialDaysRemaining } from '@/services/authService';
 import { restorePurchases } from '@/services/subscriptionService';
+import { getSyncStatus, syncTrips, type SyncStatus } from '@/services/syncService';
 
 export default function SettingsScreen() {
   const colors = useColors();
@@ -66,10 +60,8 @@ export default function SettingsScreen() {
     activeTrip: null as any,
     isTracking: false,
   });
-  const [mileageRates, setMileageRates] = useState<MileageRate[]>([]);
-  const [showRateModal, setShowRateModal] = useState(false);
-  const [editYear, setEditYear] = useState(new Date().getFullYear());
-  const [editRate, setEditRate] = useState('0.70');
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [manualSyncing, setManualSyncing] = useState(false);
 
   const purposes = ['business', 'personal', 'medical', 'charity', 'other'] as const;
 
@@ -88,13 +80,11 @@ export default function SettingsScreen() {
       const active = await isAutoTrackingActive();
       const purpose = await getDefaultPurpose();
       const notifEnabled = await areNotificationsEnabled();
-      const rates = await getAllRates();
 
       setAutoTrackingEnabled(enabled);
       setAutoTrackingActive(active);
       setDefaultPurposeState(purpose);
       setNotificationsEnabledState(notifEnabled);
-      setMileageRates(rates);
 
       // Initialize notifications on first load
       await initializeNotifications();
@@ -110,7 +100,6 @@ export default function SettingsScreen() {
       setAutoTrackingActive(false);
       setDefaultPurposeState('business');
       setNotificationsEnabledState(false);
-      setMileageRates([]);
     } finally {
       setLoading(false);
     }
@@ -129,8 +118,25 @@ export default function SettingsScreen() {
         activeTrip,
         isTracking: tracking,
       });
+
+      // Load sync status
+      const status = getSyncStatus();
+      setSyncStatus(status);
     } catch (error) {
       console.error('Error loading diagnostic info:', error);
+    }
+  };
+
+  const handleManualSync = async () => {
+    setManualSyncing(true);
+    try {
+      await syncTrips();
+      const status = getSyncStatus();
+      setSyncStatus(status);
+    } catch (error) {
+      console.error('[Settings] Error during manual sync:', error);
+    } finally {
+      setManualSyncing(false);
     }
   };
 
@@ -259,39 +265,6 @@ export default function SettingsScreen() {
       Alert.alert('Error', 'Failed to toggle notifications. Please check notification permissions in your device settings.');
     }
   };
-
-  const handleAddOrEditRate = async (year: number) => {
-    try {
-      const currentRate = await getRateForYear(year);
-      setEditYear(year);
-      setEditRate(currentRate.toFixed(2));
-      setShowRateModal(true);
-    } catch (error) {
-      console.error('Error loading rate:', error);
-      setEditYear(year);
-      setEditRate('0.70');
-      setShowRateModal(true);
-    }
-  };
-
-  const handleSaveRate = async () => {
-    try {
-      const rate = parseFloat(editRate);
-      if (isNaN(rate) || rate < 0 || rate > 10) {
-        Alert.alert('Invalid Rate', 'Please enter a valid rate between $0.00 and $10.00');
-        return;
-      }
-
-      await setRateForYear(editYear, rate);
-      setShowRateModal(false);
-      await loadSettings();
-      Alert.alert('Success', `Mileage rate for ${editYear} set to $${rate.toFixed(2)}/mile`);
-    } catch (error) {
-      console.error('Error saving rate:', error);
-      Alert.alert('Error', 'Failed to save mileage rate');
-    }
-  };
-
 
   if (loading) {
     return (
@@ -506,6 +479,51 @@ export default function SettingsScreen() {
               </>
             )}
 
+            {/* Sync Status */}
+            <ThemedView style={[styles.diagnosticRow, { marginTop: Spacing.lg, paddingTop: Spacing.lg, borderTopWidth: 1, borderTopColor: colors.border }]}>
+              <ThemedText style={styles.diagnosticLabel}>🔄 Cloud Sync Status:</ThemedText>
+              <ThemedText style={[styles.diagnosticValue, { color: syncStatus?.isSyncing ? colors.warning : (syncStatus?.lastSyncSuccess ? colors.success : colors.error) }]}>
+                {syncStatus?.isSyncing ? 'Syncing...' : (syncStatus?.lastSyncSuccess ? '✓ Synced' : (syncStatus?.lastSyncTime ? '✗ Error' : 'Not yet synced'))}
+              </ThemedText>
+            </ThemedView>
+
+            {syncStatus?.lastSyncTime && (
+              <ThemedView style={styles.diagnosticRow}>
+                <ThemedText style={styles.diagnosticLabel}>Last Sync:</ThemedText>
+                <ThemedText style={styles.diagnosticValue}>
+                  {new Date(syncStatus.lastSyncTime).toLocaleString()}
+                </ThemedText>
+              </ThemedView>
+            )}
+
+            {syncStatus && (syncStatus.tripsUploaded > 0 || syncStatus.tripsDownloaded > 0) && (
+              <ThemedView style={styles.diagnosticRow}>
+                <ThemedText style={styles.diagnosticLabel}>Last Sync Result:</ThemedText>
+                <ThemedText style={styles.diagnosticValue}>
+                  ↑{syncStatus.tripsUploaded} uploaded, ↓{syncStatus.tripsDownloaded} downloaded
+                </ThemedText>
+              </ThemedView>
+            )}
+
+            {syncStatus?.lastSyncError && (
+              <ThemedView style={styles.diagnosticRow}>
+                <ThemedText style={styles.diagnosticLabel}>Error:</ThemedText>
+                <ThemedText style={[styles.diagnosticValue, { color: colors.error }]} numberOfLines={2}>
+                  {syncStatus.lastSyncError}
+                </ThemedText>
+              </ThemedView>
+            )}
+
+            <TouchableOpacity
+              style={[styles.button, styles.primaryButton, { backgroundColor: colors.primary, opacity: manualSyncing ? 0.5 : 1, marginTop: Spacing.md }]}
+              onPress={handleManualSync}
+              disabled={manualSyncing}
+            >
+              <ThemedText style={[styles.primaryButtonText, { color: colors.textInverse }]}>
+                {manualSyncing ? 'Syncing...' : '🔄 Sync Now'}
+              </ThemedText>
+            </TouchableOpacity>
+
             <ThemedView style={styles.diagnosticHelpBox}>
               <ThemedText style={styles.diagnosticHelpTitle}>Quick Checks:</ThemedText>
               <ThemedText style={styles.diagnosticHelpText}>
@@ -683,41 +701,6 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </ThemedView>
 
-      <ThemedView style={[styles.section, { backgroundColor: colors.surface }]}>
-        <ThemedText type="subtitle" style={styles.sectionTitle}>
-          IRS Mileage Rates
-        </ThemedText>
-        <ThemedText style={[styles.sectionDescription, { color: colors.textSecondary }]}>
-          Official IRS standard mileage rates are automatically configured. Your trips are calculated using the rate from their calendar year. You can override rates if needed.
-        </ThemedText>
-
-        {mileageRates.length > 0 ? (
-          <ThemedView style={styles.ratesContainer}>
-            {mileageRates.map((rate) => (
-              <TouchableOpacity
-                key={rate.year}
-                style={[styles.rateRow, { backgroundColor: colors.surface, borderColor: colors.border }]}
-                onPress={() => handleAddOrEditRate(rate.year)}
-              >
-                <ThemedView style={styles.rateInfo}>
-                  <ThemedText type="defaultSemiBold">{rate.year}</ThemedText>
-                  <ThemedText style={[styles.rateValue, { color: colors.primary }]}>${rate.rate.toFixed(3)}/mile</ThemedText>
-                </ThemedView>
-                <ThemedText style={[styles.editIcon, { color: colors.textSecondary }]}>✎</ThemedText>
-              </TouchableOpacity>
-            ))}
-          </ThemedView>
-        ) : (
-          <ThemedText style={[styles.noRatesText, { color: colors.textSecondary }]}>Loading rates...</ThemedText>
-        )}
-
-        <ThemedView style={[styles.rateInfoBox, { backgroundColor: colors.surfaceLight, borderLeftColor: colors.info }]}>
-          <ThemedText style={[styles.rateInfoText, { color: colors.textSecondary }]}>
-            ℹ️ Rates are pre-configured with official IRS standard mileage rates for business use. Tap any year to customize if needed.
-          </ThemedText>
-        </ThemedView>
-      </ThemedView>
-
       </ScrollView>
 
       {/* Quick Start Guide Modal */}
@@ -838,54 +821,6 @@ export default function SettingsScreen() {
           </View>
           <TripDiagnostic />
         </View>
-      </Modal>
-
-      {/* Mileage Rate Edit Modal */}
-      <Modal
-        visible={showRateModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowRateModal(false)}
-      >
-        <ThemedView style={styles.rateModalOverlay}>
-          <ThemedView style={[styles.rateModalContent, { backgroundColor: colors.surface }]}>
-            <ThemedText type="subtitle" style={[styles.modalTitle, { color: colors.text }]}>
-              Set Mileage Rate for {editYear}
-            </ThemedText>
-
-            <ThemedText style={[styles.rateModalDescription, { color: colors.textSecondary }]}>
-              Override the mileage rate for {editYear}. Leave as-is to use the official IRS standard rate.
-            </ThemedText>
-
-            <ThemedView style={[styles.rateInputContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
-              <ThemedText style={[styles.dollarSign, { color: colors.text }]}>$</ThemedText>
-              <TextInput
-                style={[styles.rateInput, { color: colors.text }]}
-                value={editRate}
-                onChangeText={setEditRate}
-                keyboardType="decimal-pad"
-                placeholder="0.70"
-                placeholderTextColor={colors.textTertiary}
-              />
-              <ThemedText style={[styles.perMile, { color: colors.textSecondary }]}>/mile</ThemedText>
-            </ThemedView>
-
-            <ThemedView style={styles.rateModalButtons}>
-              <TouchableOpacity
-                style={[styles.rateCancelButton, { borderColor: colors.primary }]}
-                onPress={() => setShowRateModal(false)}
-              >
-                <ThemedText style={[styles.rateCancelButtonText, { color: colors.primary }]}>Cancel</ThemedText>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.rateSaveButton, { backgroundColor: colors.primary }]}
-                onPress={handleSaveRate}
-              >
-                <ThemedText style={[styles.rateSaveButtonText, { color: colors.textInverse }]}>Save</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
-          </ThemedView>
-        </ThemedView>
       </Modal>
     </>
   );
@@ -1020,6 +955,14 @@ const styles = StyleSheet.create({
     ...Shadows.md,
   },
   buttonText: {
+    color: Colors.textInverse,
+    fontSize: Typography.base,
+    fontWeight: Typography.semibold,
+  },
+  primaryButton: {
+    backgroundColor: Colors.primary,
+  },
+  primaryButtonText: {
     color: Colors.textInverse,
     fontSize: Typography.base,
     fontWeight: Typography.semibold,

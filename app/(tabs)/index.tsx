@@ -1,21 +1,30 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, ScrollView, RefreshControl } from 'react-native';
+import { StyleSheet, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { LoadingAnimation } from '@/components/LoadingAnimation';
 import {
   getTripStatsForToday,
   getBusinessDeductibleValueForToday,
-  getTripsByDateRange,
+  getAllTrips,
   Trip,
 } from '@/services/tripService';
+import {
+  getLocalTrips,
+  getLocalTripStatsForToday,
+  getLocalBusinessDeductibleForToday,
+  LocalTrip,
+} from '@/services/localDatabase';
+import { getRateForYear } from '@/services/mileageRateService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
 import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
 
 
 export default function DashboardScreen() {
   const colors = useColors();
+  const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -28,6 +37,7 @@ export default function DashboardScreen() {
     personalDistance: 0,
   });
   const [todayDeductible, setTodayDeductible] = useState(0);
+  const [recentTrips, setRecentTrips] = useState<LocalTrip[]>([]);
 
   const loadData = async () => {
     // Don't load if auth is still loading or user is not logged in
@@ -38,13 +48,32 @@ export default function DashboardScreen() {
     }
 
     try {
-      const [todayStatsData, todayDeductibleData] = await Promise.all([
-        getTripStatsForToday(),
-        getBusinessDeductibleValueForToday(),
+      console.log('[Dashboard] Loading from local SQLite...');
+
+      // Get current year's mileage rate
+      const currentYear = new Date().getFullYear();
+      const ratePerMile = await getRateForYear(currentYear);
+
+      // Load from local database (fast, always available)
+      const [todayStatsData, todayDeductibleData, allTrips] = await Promise.all([
+        getLocalTripStatsForToday(user.id),
+        getLocalBusinessDeductibleForToday(user.id, ratePerMile),
+        getLocalTrips(user.id),
       ]);
+
+      console.log('[Dashboard] ✅ Loaded from local SQLite:', {
+        trips: allTrips.length,
+        todayTrips: todayStatsData.totalTrips,
+      });
 
       setTodayStats(todayStatsData);
       setTodayDeductible(todayDeductibleData);
+
+      // Get the 5 most recent trips
+      const recent = allTrips
+        .sort((a, b) => b.start_time - a.start_time)
+        .slice(0, 5);
+      setRecentTrips(recent);
     } catch (error) {
       console.error('[Dashboard] Error loading data:', error);
       // Use default values on error
@@ -57,17 +86,17 @@ export default function DashboardScreen() {
         personalDistance: 0,
       });
       setTodayDeductible(0);
+      setRecentTrips([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  // Only load data when auth is ready and user is logged in
+  // Remove redundant useEffect - useFocusEffect handles initial load and focus
+  // Keep a simple useEffect just to handle the case when auth completes with no user
   useEffect(() => {
-    if (!authLoading && user) {
-      loadData();
-    } else if (!authLoading && !user) {
+    if (!authLoading && !user) {
       // Auth completed but no user - set loading to false
       setLoading(false);
     }
@@ -75,16 +104,9 @@ export default function DashboardScreen() {
 
   useFocusEffect(
     React.useCallback(() => {
-      // Only load and set up auto-refresh if user is logged in
+      // Load data when screen comes into focus
       if (!authLoading && user) {
         loadData();
-
-        // Reduce auto-refresh frequency to every 30 seconds to avoid excessive queries
-        const interval = setInterval(() => {
-          loadData();
-        }, 30000);
-
-        return () => clearInterval(interval);
       }
     }, [authLoading, user])
   );
@@ -92,6 +114,59 @@ export default function DashboardScreen() {
   const onRefresh = () => {
     setRefreshing(true);
     loadData();
+  };
+
+  const formatDate = (timestamp: number) => {
+    const date = new Date(timestamp);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    if (date.toDateString() === today.toDateString()) {
+      return 'Today';
+    } else if (date.toDateString() === yesterday.toDateString()) {
+      return 'Yesterday';
+    } else {
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+  };
+
+  const formatTime = (timestamp: number) => {
+    return new Date(timestamp).toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  };
+
+  const getPurposeColor = (purpose: string) => {
+    switch (purpose) {
+      case 'business':
+        return colors.primary;
+      case 'personal':
+        return colors.textSecondary;
+      case 'medical':
+        return colors.error;
+      case 'charity':
+        return colors.success;
+      default:
+        return colors.textTertiary;
+    }
+  };
+
+  const getPurposeEmoji = (purpose: string) => {
+    switch (purpose) {
+      case 'business':
+        return '💼';
+      case 'personal':
+        return '🏠';
+      case 'medical':
+        return '⚕️';
+      case 'charity':
+        return '❤️';
+      default:
+        return '📍';
+    }
   };
 
   if (loading) {
@@ -146,6 +221,65 @@ export default function DashboardScreen() {
           </ThemedView>
         </ThemedView>
       </ThemedView>
+
+      {/* Recent Trips */}
+      <ThemedView style={{ backgroundColor: 'transparent' }}>
+        <ThemedView style={[styles.recentHeader, { backgroundColor: 'transparent' }]}>
+          <ThemedText type="subtitle">Recent Trips</ThemedText>
+          <TouchableOpacity onPress={() => router.push('/(tabs)/history')}>
+            <ThemedText style={[styles.viewAllText, { color: colors.primary }]}>View All</ThemedText>
+          </TouchableOpacity>
+        </ThemedView>
+
+        {recentTrips.length === 0 ? (
+          <ThemedView style={styles.emptyState}>
+            <ThemedText style={[styles.emptyStateText, { color: colors.textSecondary }]}>
+              No trips yet. Start tracking your mileage!
+            </ThemedText>
+          </ThemedView>
+        ) : (
+          <ThemedView style={styles.tripsList}>
+            {recentTrips.map((trip) => (
+              <ThemedView
+                key={trip.id}
+                style={[styles.tripCard, { backgroundColor: 'transparent', borderColor: colors.border }]}
+              >
+                <ThemedView style={styles.tripHeader}>
+                  <ThemedView style={styles.tripHeaderLeft}>
+                    <ThemedText style={styles.tripEmoji}>{getPurposeEmoji(trip.purpose)}</ThemedText>
+                    <ThemedView style={styles.tripHeaderText}>
+                      <ThemedText style={styles.tripDate}>{formatDate(trip.start_time)}</ThemedText>
+                      <ThemedText style={[styles.tripTime, { color: colors.textTertiary }]}>
+                        {formatTime(trip.start_time)}
+                      </ThemedText>
+                    </ThemedView>
+                  </ThemedView>
+                  <ThemedView style={styles.tripHeaderRight}>
+                    <ThemedText style={[styles.tripDistance, { color: colors.primary }]}>
+                      {trip.distance.toFixed(1)} mi
+                    </ThemedText>
+                    <ThemedText
+                      style={[styles.tripPurpose, { color: getPurposeColor(trip.purpose) }]}
+                    >
+                      {trip.purpose.charAt(0).toUpperCase() + trip.purpose.slice(1)}
+                    </ThemedText>
+                  </ThemedView>
+                </ThemedView>
+
+                <ThemedView style={styles.tripRoute}>
+                  <ThemedText style={[styles.tripLocation, { color: colors.text }]} numberOfLines={1}>
+                    {trip.start_location}
+                  </ThemedText>
+                  <ThemedText style={[styles.tripArrow, { color: colors.textTertiary }]}>→</ThemedText>
+                  <ThemedText style={[styles.tripLocation, { color: colors.text }]} numberOfLines={1}>
+                    {trip.end_location}
+                  </ThemedText>
+                </ThemedView>
+              </ThemedView>
+            ))}
+          </ThemedView>
+        )}
+      </ThemedView>
     </ScrollView>
   );
 }
@@ -197,5 +331,93 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     fontWeight: Typography.medium,
     textAlign: 'center',
+  },
+  recentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Spacing.md,
+    paddingHorizontal: Spacing.xs,
+  },
+  viewAllText: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.semibold,
+    color: Colors.primary,
+  },
+  emptyState: {
+    paddingVertical: Spacing.xxl,
+    alignItems: 'center',
+  },
+  emptyStateText: {
+    fontSize: Typography.base,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
+  tripsList: {
+    gap: Spacing.md,
+  },
+  tripCard: {
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.sm,
+  },
+  tripHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Spacing.sm,
+  },
+  tripHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  tripEmoji: {
+    fontSize: Typography.xl,
+    marginRight: Spacing.sm,
+  },
+  tripHeaderText: {
+    flex: 1,
+  },
+  tripDate: {
+    fontSize: Typography.base,
+    fontWeight: Typography.semibold,
+    color: Colors.text,
+  },
+  tripTime: {
+    fontSize: Typography.xs,
+    color: Colors.textTertiary,
+    marginTop: 2,
+  },
+  tripHeaderRight: {
+    alignItems: 'flex-end',
+  },
+  tripDistance: {
+    fontSize: Typography.lg,
+    fontWeight: Typography.bold,
+    color: Colors.primary,
+  },
+  tripPurpose: {
+    fontSize: Typography.xs,
+    fontWeight: Typography.semibold,
+    marginTop: 2,
+  },
+  tripRoute: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    marginTop: Spacing.xs,
+  },
+  tripLocation: {
+    fontSize: Typography.sm,
+    color: Colors.text,
+    flex: 1,
+  },
+  tripArrow: {
+    fontSize: Typography.sm,
+    color: Colors.textTertiary,
+    marginHorizontal: Spacing.xs,
   },
 });

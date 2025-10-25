@@ -95,7 +95,7 @@ export default function SignInScreen() {
 
             {loading && (
               <View style={styles.loadingOverlay}>
-                <LoadingAnimation text="Signing in..." size={50} />
+                <LoadingAnimation text="Signing in..." size="small" />
               </View>
             )}
 

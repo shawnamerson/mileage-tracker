@@ -182,13 +182,13 @@ export async function getAllTrips(): Promise<Trip[]> {
 
     if (error) {
       console.error('Error getting all trips:', error);
-      throw new Error('Failed to retrieve trips from database');
+      return []; // Return empty array instead of throwing
     }
 
     return data || [];
   } catch (error) {
     console.error('Error getting all trips:', error);
-    throw error;
+    return []; // Return empty array on any error
   }
 }
 
