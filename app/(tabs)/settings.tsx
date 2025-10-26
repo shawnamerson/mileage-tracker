@@ -39,6 +39,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getTrialDaysRemaining } from '@/services/authService';
 import { restorePurchases } from '@/services/subscriptionService';
 import { getSyncStatus, syncTrips, type SyncStatus } from '@/services/syncService';
+import { getLocalTrips } from '@/services/localDatabase';
 
 export default function SettingsScreen() {
   const colors = useColors();
@@ -137,6 +138,36 @@ export default function SettingsScreen() {
       console.error('[Settings] Error during manual sync:', error);
     } finally {
       setManualSyncing(false);
+    }
+  };
+
+  const handleCheckSQLite = async () => {
+    if (!user) {
+      Alert.alert('Error', 'No user logged in');
+      return;
+    }
+
+    try {
+      console.log('[Settings] Checking SQLite database for user:', user.id);
+      const localTrips = await getLocalTrips(user.id);
+      console.log('[Settings] Found', localTrips.length, 'trips in SQLite');
+
+      // Also check Supabase
+      const supabaseTrips = await getAllTrips();
+      console.log('[Settings] Found', supabaseTrips.length, 'trips in Supabase');
+
+      Alert.alert(
+        'Database Check',
+        `Local SQLite: ${localTrips.length} trips\n` +
+        `Supabase Cloud: ${supabaseTrips.length} trips\n\n` +
+        `${localTrips.length === 0 ? '⚠️ No trips in local database!\n' : ''}` +
+        `${supabaseTrips.length === 0 ? '⚠️ No trips in Supabase!\n' : ''}` +
+        `Check Console.app logs for details.`,
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('[Settings] Error checking databases:', error);
+      Alert.alert('Error', `Failed to check databases: ${error}`);
     }
   };
 
@@ -521,6 +552,15 @@ export default function SettingsScreen() {
             >
               <ThemedText style={[styles.primaryButtonText, { color: colors.textInverse }]}>
                 {manualSyncing ? 'Syncing...' : '🔄 Sync Now'}
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.button, styles.secondaryButton, { borderColor: colors.border, marginTop: Spacing.sm }]}
+              onPress={handleCheckSQLite}
+            >
+              <ThemedText style={[styles.secondaryButtonText, { color: colors.text }]}>
+                🔍 Check Database Status
               </ThemedText>
             </TouchableOpacity>
 
