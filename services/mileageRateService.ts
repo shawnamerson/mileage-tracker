@@ -1,127 +1,70 @@
-import { supabase } from './supabase';
-
 export interface MileageRate {
-  id?: string;
   year: number;
   rate: number;
-  created_at?: string;
-  updated_at?: string;
 }
 
 /**
- * Get the mileage rate for a specific year
+ * Official IRS Standard Mileage Rates for Business Use
+ * Source: https://www.irs.gov/tax-professionals/standard-mileage-rates
+ *
+ * These rates are hardcoded and apply to all users.
+ * Update this table annually when IRS announces new rates (typically in December).
+ */
+const IRS_MILEAGE_RATES: Record<number, number> = {
+  2025: 0.70,   // 70 cents per mile (announced Dec 2024)
+  2024: 0.67,   // 67 cents per mile
+  2023: 0.655,  // 65.5 cents per mile
+  2022: 0.625,  // 62.5 cents per mile (rate increased mid-year from 58.5)
+  2021: 0.56,   // 56 cents per mile
+  2020: 0.575,  // 57.5 cents per mile
+  2019: 0.58,   // 58 cents per mile
+  2018: 0.545,  // 54.5 cents per mile
+  2017: 0.535,  // 53.5 cents per mile
+  2016: 0.54,   // 54 cents per mile
+  2015: 0.575,  // 57.5 cents per mile
+};
+
+// Default rate for years not in the table
+const DEFAULT_RATE = 0.67;
+
+/**
+ * Get the IRS standard mileage rate for a specific year
+ * Returns the official IRS rate or a default if year not found
  */
 export async function getRateForYear(year: number): Promise<number> {
-  try {
-    const { data, error } = await supabase
-      .from('mileage_rates')
-      .select('rate')
-      .eq('year', year)
-      .single();
+  const rate = IRS_MILEAGE_RATES[year];
 
-    if (error) {
-      console.error('[Mileage Rates] Error fetching rate for year:', error);
-      // If no rate found for the year, return a default rate of 0.70
-      return 0.70;
-    }
-
-    return data?.rate ?? 0.70;
-  } catch (error) {
-    console.error('[Mileage Rates] Error in getRateForYear:', error);
-    return 0.70;
+  if (rate === undefined) {
+    console.log(`[Mileage Rates] No rate found for ${year}, using default rate: $${DEFAULT_RATE}`);
+    return DEFAULT_RATE;
   }
+
+  return rate;
 }
 
 /**
- * Get all mileage rates, ordered by year descending
+ * Get all available mileage rates, ordered by year descending
  */
 export async function getAllRates(): Promise<MileageRate[]> {
-  try {
-    const { data, error } = await supabase
-      .from('mileage_rates')
-      .select('*')
-      .order('year', { ascending: false });
+  const rates = Object.entries(IRS_MILEAGE_RATES)
+    .map(([year, rate]) => ({
+      year: parseInt(year),
+      rate,
+    }))
+    .sort((a, b) => b.year - a.year);
 
-    if (error) {
-      console.error('[Mileage Rates] Error fetching all rates:', error);
-      return [];
-    }
-
-    return data || [];
-  } catch (error) {
-    console.error('[Mileage Rates] Error in getAllRates:', error);
-    return [];
-  }
-}
-
-/**
- * Set or update the mileage rate for a specific year
- */
-export async function setRateForYear(year: number, rate: number): Promise<void> {
-  if (year < 2000 || year > 2100) {
-    throw new Error('Invalid year');
-  }
-
-  if (rate < 0 || rate > 10) {
-    throw new Error('Invalid rate (must be between $0.00 and $10.00)');
-  }
-
-  try {
-    // Use upsert to insert or update
-    const { error } = await supabase
-      .from('mileage_rates')
-      .upsert({
-        year,
-        rate,
-        updated_at: new Date().toISOString(),
-      }, {
-        onConflict: 'year',
-      });
-
-    if (error) {
-      console.error('[Mileage Rates] Error setting rate for year:', error);
-      throw new Error('Failed to save mileage rate');
-    }
-
-    console.log(`[Mileage Rates] ✅ Set rate for ${year}: $${rate.toFixed(3)}`);
-  } catch (error) {
-    console.error('[Mileage Rates] Error in setRateForYear:', error);
-    throw error;
-  }
+  return rates;
 }
 
 /**
  * Get mileage rates grouped by year (used for calculations)
  */
 export async function getRatesByYear(): Promise<Map<number, number>> {
-  const rates = await getAllRates();
   const rateMap = new Map<number, number>();
 
-  rates.forEach(rate => {
-    rateMap.set(rate.year, rate.rate);
+  Object.entries(IRS_MILEAGE_RATES).forEach(([year, rate]) => {
+    rateMap.set(parseInt(year), rate);
   });
 
   return rateMap;
-}
-
-/**
- * Delete a mileage rate for a specific year
- */
-export async function deleteRateForYear(year: number): Promise<void> {
-  try {
-    const { error } = await supabase
-      .from('mileage_rates')
-      .delete()
-      .eq('year', year);
-
-    if (error) {
-      console.error('[Mileage Rates] Error deleting rate for year:', error);
-      throw new Error('Failed to delete mileage rate');
-    }
-
-    console.log(`[Mileage Rates] ✅ Deleted rate for ${year}`);
-  } catch (error) {
-    console.error('[Mileage Rates] Error in deleteRateForYear:', error);
-    throw error;
-  }
 }

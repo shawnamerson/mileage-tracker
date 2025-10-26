@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { createTrip } from '@/services/tripService';
+import { createTrip, getTripsByDateRange } from '@/services/tripService';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   getCurrentLocation,
   reverseGeocode,
@@ -29,6 +30,7 @@ import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@
 export default function AddTripScreen() {
   const router = useRouter();
   const colors = useColors();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [tracking, setTracking] = useState(false);
   const [activeTrip, setActiveTrip] = useState<ActiveTrip | null>(null);
@@ -71,6 +73,35 @@ export default function AddTripScreen() {
       const fiveMinutes = 5 * 60 * 1000;
 
       if (!isActive && tripAge > fiveMinutes && !recoveryAlertShown) {
+        // Before showing recovery alert, check if this trip was already saved by auto-tracking
+        // This prevents duplicate saves when auto-tracking saves and user manually saves
+        try {
+          const startDate = new Date(trip.start_time);
+          startDate.setHours(0, 0, 0, 0); // Start of day
+          const endDate = new Date(trip.start_time);
+          endDate.setHours(23, 59, 59, 999); // End of day
+
+          const existingTrips = await getTripsByDateRange(startDate.getTime(), endDate.getTime());
+
+          // Check if a trip with matching start_time and similar distance already exists
+          const alreadySaved = existingTrips.some(existingTrip => {
+            const timeDiff = Math.abs(existingTrip.start_time - trip.start_time);
+            const distanceDiff = Math.abs(existingTrip.distance - trip.distance);
+            // Consider it the same trip if start time is within 10 seconds and distance within 0.1 miles
+            return timeDiff < 10000 && distanceDiff < 0.1;
+          });
+
+          if (alreadySaved) {
+            console.log('[Add] Trip already saved by auto-tracking - clearing active trip without prompting');
+            await clearActiveTrip();
+            setActiveTrip(null);
+            return;
+          }
+        } catch (error) {
+          console.error('[Add] Error checking for existing trip:', error);
+          // Continue to show recovery alert if check fails
+        }
+
         // Show recovery alert only once
         setRecoveryAlertShown(true);
 
@@ -121,8 +152,14 @@ export default function AddTripScreen() {
 
       // Save trip to database
       const now = Date.now();
+      if (!user) {
+        throw new Error('User not logged in');
+      }
+
       try {
-        await createTrip({
+        const tripData = {
+          id: `trip_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          user_id: user.id,
           start_location: trip.start_location,
           end_location: endLocation,
           start_latitude: trip.start_latitude,
@@ -134,7 +171,10 @@ export default function AddTripScreen() {
           end_time: now,
           purpose: trip.purpose,
           notes: trip.notes,
-        });
+        };
+
+        // Save trip to Supabase (handles offline queue automatically)
+        await createTrip(tripData);
 
         // Clear trip data after successful save
         await clearActiveTrip();
@@ -247,8 +287,14 @@ export default function AddTripScreen() {
 
             // Save trip to database
             const now = Date.now();
+            if (!user) {
+              throw new Error('User not logged in');
+            }
+
             try {
-              await createTrip({
+              const tripData = {
+                id: `trip_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                user_id: user.id,
                 start_location: completedTrip.start_location,
                 end_location: endLocation,
                 start_latitude: completedTrip.start_latitude,
@@ -260,7 +306,10 @@ export default function AddTripScreen() {
                 end_time: now,
                 purpose: completedTrip.purpose,
                 notes: completedTrip.notes,
-              });
+              };
+
+              // Save trip to Supabase (handles offline queue automatically)
+              await createTrip(tripData);
 
               // Clear trip data after successful save
               await clearActiveTrip();
@@ -514,6 +563,7 @@ const styles = StyleSheet.create({
   },
   statRow: {
     marginBottom: 16,
+    backgroundColor: 'transparent',
   },
   statLabel: {
     fontSize: 14,
@@ -523,11 +573,14 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 18,
     fontWeight: '600',
+    backgroundColor: 'transparent',
   },
   distanceValue: {
     fontSize: 32,
     fontWeight: 'bold',
     color: '#007AFF',
+    backgroundColor: 'transparent',
+    flexWrap: 'wrap',
   },
   section: {
     marginBottom: Spacing.lg,

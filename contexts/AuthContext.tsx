@@ -49,12 +49,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Sign out
   const handleSignOut = async () => {
     try {
-      await supabase.auth.signOut();
+      console.log('[Auth] Signing out...');
+
+      // Add timeout to prevent hanging
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Sign out timeout')), 5000)
+      );
+
+      const signOutPromise = supabase.auth.signOut();
+
+      await Promise.race([signOutPromise, timeoutPromise]).catch(error => {
+        console.log('[Auth] Supabase sign out failed (continuing anyway):', error.message);
+      });
+
+      // Clear state regardless of whether Supabase call succeeded
       setSession(null);
       setUser(null);
       setProfile(null);
+      console.log('[Auth] ✅ Signed out successfully');
     } catch (error) {
-      console.error('Error signing out:', error);
+      console.error('[Auth] Error signing out:', error);
+      // Force clear state even on error
+      setSession(null);
+      setUser(null);
+      setProfile(null);
     }
   };
 
@@ -75,11 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (session?.user) {
           await fetchProfile(session.user.id);
-
-          // Initialize sync in background - don't block UI
-          initializeSync().catch((error: Error) => {
-            console.error('Error initializing sync:', error);
-          });
+          // Sync will be initialized by onAuthStateChange listener
         }
 
         setLoading(false);

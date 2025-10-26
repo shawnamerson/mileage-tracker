@@ -28,10 +28,12 @@ const PRODUCT_IDS_LIST = Object.values(PRODUCT_IDS);
 
 let purchaseUpdateSubscription: any = null;
 let purchaseErrorSubscription: any = null;
+let isIAPInitialized = false;
 
 /**
  * Initialize Apple IAP connection
  * Call this on app startup
+ * Safe to call multiple times - will only initialize once
  */
 export async function initializeIAP(): Promise<boolean> {
   if (!RNIap) {
@@ -39,9 +41,16 @@ export async function initializeIAP(): Promise<boolean> {
     return false;
   }
 
+  // Prevent duplicate initialization
+  if (isIAPInitialized) {
+    console.log('[Apple IAP] Already initialized, skipping');
+    return true;
+  }
+
   try {
     const result = await RNIap.initConnection();
     console.log('[Apple IAP] ✅ Connection initialized:', result);
+    isIAPInitialized = true;
 
     // Set up listeners for purchase updates
     setupPurchaseListeners();
@@ -99,10 +108,16 @@ function setupPurchaseListeners() {
 /**
  * Clean up IAP connection
  * Call this when app is closing
+ * Note: Usually not necessary unless truly shutting down the app
  */
 export async function cleanupIAP(): Promise<void> {
   if (!RNIap) {
     console.log('[Apple IAP] Module not available - skipping cleanup');
+    return;
+  }
+
+  if (!isIAPInitialized) {
+    console.log('[Apple IAP] Not initialized, skipping cleanup');
     return;
   }
 
@@ -116,6 +131,7 @@ export async function cleanupIAP(): Promise<void> {
       purchaseErrorSubscription = null;
     }
     await RNIap.endConnection();
+    isIAPInitialized = false;
     console.log('[Apple IAP] Connection closed');
   } catch (error) {
     console.error('[Apple IAP] Error closing connection:', error);
