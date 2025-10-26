@@ -32,19 +32,27 @@ export default function HistoryScreen() {
   const purposes = ['business', 'personal', 'medical', 'charity', 'other'] as const;
 
   const loadTrips = async () => {
+    console.log('[History] loadTrips called, user:', user?.id);
     if (!user) {
+      console.log('[History] No user found, setting loading=false');
       setLoading(false);
       setRefreshing(false);
       return;
     }
 
     try {
-      console.log('[History] Loading from local SQLite...');
+      console.log('[History] Loading from local SQLite for user:', user.id);
 
       // Load from local database (fast, always available)
       const localTrips = await getLocalTrips(user.id);
 
       console.log('[History] ✅ Loaded from local SQLite:', localTrips.length, 'trips');
+      if (localTrips.length === 0) {
+        console.log('[History] ⚠️ No trips found in local SQLite! This could mean:');
+        console.log('[History]   1. No trips have been created yet');
+        console.log('[History]   2. Sync has not run yet');
+        console.log('[History]   3. Downloaded trips were not saved to local SQLite');
+      }
 
       setTrips(localTrips);
     } catch (error) {
@@ -61,7 +69,7 @@ export default function HistoryScreen() {
   useFocusEffect(
     React.useCallback(() => {
       loadTrips();
-    }, [])
+    }, [user])
   );
 
   const onRefresh = () => {

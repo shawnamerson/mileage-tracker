@@ -21,7 +21,16 @@
       "Read(//Users/shawnamerson/Library/Developer/Xcode/DerivedData/**)",
       "Bash(pkill:*)",
       "Bash(open:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(plutil:*)",
+      "Bash(head:*)",
+      "Bash(npx eas-cli:*)",
+      "Bash(xcrun xctrace:*)",
+      "Bash(xcrun devicectl device info logs:*)",
+      "Bash(idevicesyslog:*)",
+      "Bash(log stream --device-name \"Shawn''''s iPhone\" --predicate 'processImagePath CONTAINS \"\"\"\"MileMate\"\"\"\"' --style compact --timeout 15)"
     ],
     "deny": [],
     "ask": []

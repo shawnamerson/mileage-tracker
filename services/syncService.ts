@@ -608,11 +608,15 @@ export async function syncTrips(): Promise<{
 
     // Save downloaded trips to local SQLite
     console.log(`[Sync] Saving ${cloudTrips.length} downloaded trips to local database...`);
+    if (cloudTrips.length === 0) {
+      console.log('[Sync] ⚠️ No trips to save - cloudTrips array is empty');
+    }
     let savedCount = 0;
     for (const trip of cloudTrips) {
       try {
         // Ensure trip has required fields for saveLocalTrip
         if (trip.id && trip.user_id) {
+          console.log(`[Sync] Saving trip ${savedCount + 1}/${cloudTrips.length}: ${trip.id}`);
           await saveLocalTrip({
             id: trip.id,
             user_id: trip.user_id,
@@ -638,6 +642,22 @@ export async function syncTrips(): Promise<{
       }
     }
     console.log(`[Sync] ✅ Saved ${savedCount}/${cloudTrips.length} trips to local database`);
+
+    // Verify the trips were actually saved by querying the database
+    if (savedCount > 0) {
+      console.log('[Sync] Verifying saved trips in local database...');
+      try {
+        const { getCurrentUser } = await import('./authService');
+        const currentUser = await getCurrentUser();
+        if (currentUser) {
+          const { getLocalTrips } = await import('./localDatabase');
+          const verifyTrips = await getLocalTrips(currentUser.id);
+          console.log(`[Sync] ✅ Verification: Found ${verifyTrips.length} total trips in local database`);
+        }
+      } catch (error) {
+        console.error('[Sync] Error verifying trips:', error);
+      }
+    }
 
     // 4. Update last sync timestamp
     await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
