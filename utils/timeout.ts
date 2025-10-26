@@ -67,8 +67,8 @@ export async function withTimeoutFallback<T>(
  * Common timeout durations
  */
 export const TIMEOUTS = {
-  QUICK: 5000,      // 5 seconds - for quick operations
-  NORMAL: 15000,    // 15 seconds - for normal operations
-  LONG: 30000,      // 30 seconds - for uploads/downloads
-  EXTENDED: 60000,  // 60 seconds - for large data operations
+  QUICK: 15000,     // 15 seconds - for quick operations (increased for slow networks)
+  NORMAL: 30000,    // 30 seconds - for normal operations (increased)
+  LONG: 60000,      // 60 seconds - for uploads/downloads (doubled)
+  EXTENDED: 120000, // 120 seconds - for large data operations (doubled)
 } as const;
