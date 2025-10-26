@@ -13,6 +13,7 @@ import {
   type QueuedOperation,
 } from './offlineQueue';
 import { withTimeout, withTimeoutFallback, TIMEOUTS, TimeoutError } from '@/utils/timeout';
+import { saveLocalTrip } from './localDatabase';
 
 const LAST_SYNC_KEY = 'last_sync_timestamp';
 const SYNC_STATUS_KEY = 'sync_status';
@@ -604,6 +605,39 @@ export async function syncTrips(): Promise<{
       }
       throw error;
     });
+
+    // Save downloaded trips to local SQLite
+    console.log(`[Sync] Saving ${cloudTrips.length} downloaded trips to local database...`);
+    let savedCount = 0;
+    for (const trip of cloudTrips) {
+      try {
+        // Ensure trip has required fields for saveLocalTrip
+        if (trip.id && trip.user_id) {
+          await saveLocalTrip({
+            id: trip.id,
+            user_id: trip.user_id,
+            start_location: trip.start_location,
+            end_location: trip.end_location,
+            start_latitude: trip.start_latitude,
+            start_longitude: trip.start_longitude,
+            end_latitude: trip.end_latitude,
+            end_longitude: trip.end_longitude,
+            distance: trip.distance,
+            start_time: trip.start_time,
+            end_time: trip.end_time,
+            purpose: trip.purpose,
+            notes: trip.notes || '',
+          });
+          savedCount++;
+        } else {
+          console.warn('[Sync] Skipping trip with missing id or user_id:', trip);
+        }
+      } catch (error) {
+        console.error('[Sync] Error saving trip to local database:', error, trip);
+        // Continue with next trip even if one fails
+      }
+    }
+    console.log(`[Sync] ✅ Saved ${savedCount}/${cloudTrips.length} trips to local database`);
 
     // 4. Update last sync timestamp
     await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
