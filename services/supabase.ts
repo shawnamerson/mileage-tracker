@@ -7,13 +7,27 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-// Validate environment variables
+// Validate environment variables - THIS IS CRITICAL!
+console.log('[Supabase] Environment check:');
+console.log('[Supabase] EXPO_PUBLIC_SUPABASE_URL:', supabaseUrl ? `SET (${supabaseUrl.substring(0, 30)}...)` : '❌ MISSING');
+console.log('[Supabase] EXPO_PUBLIC_SUPABASE_ANON_KEY:', supabaseAnonKey ? `SET (${supabaseAnonKey.substring(0, 30)}...)` : '❌ MISSING');
+
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('[Supabase] ❌ Missing environment variables!');
-  console.error('[Supabase] EXPO_PUBLIC_SUPABASE_URL:', supabaseUrl ? 'SET' : 'MISSING');
-  console.error('[Supabase] EXPO_PUBLIC_SUPABASE_ANON_KEY:', supabaseAnonKey ? 'SET' : 'MISSING');
+  const errorMsg = `
+❌❌❌ CRITICAL ERROR ❌❌❌
+Supabase environment variables are MISSING!
+EXPO_PUBLIC_SUPABASE_URL: ${supabaseUrl ? 'SET' : 'MISSING'}
+EXPO_PUBLIC_SUPABASE_ANON_KEY: ${supabaseAnonKey ? 'SET' : 'MISSING'}
+
+This means the EAS build did not include the environment variables.
+Check eas.json and rebuild with: npx eas-cli build --profile preview --platform ios
+`;
+  console.error(errorMsg);
+  alert(errorMsg); // Show visible alert
   throw new Error('Missing Supabase environment variables. Check your .env file and EAS build configuration.');
 }
+
+console.log('[Supabase] ✅ Environment variables validated successfully');
 
 // SecureStore has a 2048 byte limit, but Supabase tokens can exceed this
 // Use AsyncStorage as fallback for large values (tokens are already encrypted)
