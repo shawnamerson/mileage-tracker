@@ -20,6 +20,7 @@ export const LightColors = {
   success: '#10B981',
   warning: '#F59E0B',
   error: '#EF4444',
+  errorLight: '#FEE2E2',
   info: '#3B82F6',
 
   // Neutral Colors
@@ -58,6 +59,7 @@ export const DarkColors = {
   success: '#10B981',
   warning: '#F59E0B',
   error: '#EF4444',
+  errorLight: '#3F1F1F',
   info: '#3B82F6',
 
   // Neutral Colors - True Black Theme

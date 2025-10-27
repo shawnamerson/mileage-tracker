@@ -128,6 +128,9 @@ export async function signIn(email: string, password: string): Promise<AuthResul
  */
 export async function signOut(): Promise<{ error: AuthError | null }> {
   try {
+    // Clear user cache
+    clearUserCache();
+
     const { error } = await supabase.auth.signOut();
 
     if (error) {
@@ -156,17 +159,80 @@ export async function getSession(): Promise<Session | null> {
   }
 }
 
+// Cache to prevent concurrent getSession calls from causing deadlock
+let cachedUser: User | null = null;
+let cachedUserTimestamp: number = 0;
+const CACHE_DURATION = 5000; // 5 seconds cache
+
+// Mutex to prevent concurrent getSession calls
+let pendingUserFetch: Promise<User | null> | null = null;
+
 /**
  * Get the current user
+ * Uses in-memory cache and mutex to avoid concurrent Supabase calls that cause deadlock
  */
 export async function getCurrentUser(): Promise<User | null> {
   try {
-    const { data } = await supabase.auth.getUser();
-    return data.user;
+    // Return cached user if still valid
+    const now = Date.now();
+    if (cachedUser && (now - cachedUserTimestamp) < CACHE_DURATION) {
+      console.log('[Auth] getCurrentUser: Returning cached user:', cachedUser.id);
+      return cachedUser;
+    }
+
+    // If a fetch is already in progress, wait for it instead of starting a new one
+    if (pendingUserFetch) {
+      console.log('[Auth] getCurrentUser: Waiting for pending fetch...');
+      return await pendingUserFetch;
+    }
+
+    // Start a new fetch and store the promise
+    console.log('[Auth] getCurrentUser: Starting new fetch...');
+    pendingUserFetch = (async () => {
+      try {
+        console.log('[Auth] getCurrentUser: Fetching session...');
+        // First try to get from cached session (fast, no network call)
+        const { data: sessionData } = await supabase.auth.getSession();
+        console.log('[Auth] getCurrentUser: Session fetched, has user?', !!sessionData.session?.user);
+
+        if (sessionData.session?.user) {
+          console.log('[Auth] getCurrentUser: Caching user:', sessionData.session.user.id);
+          cachedUser = sessionData.session.user;
+          cachedUserTimestamp = Date.now();
+          return sessionData.session.user;
+        }
+
+        // Fallback to getUser if no session (makes network call)
+        console.log('[Auth] No cached session, fetching user from server...');
+        const { data } = await supabase.auth.getUser();
+        console.log('[Auth] getCurrentUser: User fetched from server:', data.user?.id);
+
+        if (data.user) {
+          cachedUser = data.user;
+          cachedUserTimestamp = Date.now();
+        }
+
+        return data.user;
+      } finally {
+        // Clear the pending fetch so new calls can proceed
+        pendingUserFetch = null;
+      }
+    })();
+
+    return await pendingUserFetch;
   } catch (error) {
-    console.error('Error getting current user:', error);
+    console.error('[Auth] Error getting current user:', error);
+    pendingUserFetch = null; // Clear on error
     return null;
   }
+}
+
+/**
+ * Clear the cached user (call on sign out)
+ */
+export function clearUserCache(): void {
+  cachedUser = null;
+  cachedUserTimestamp = 0;
 }
 
 /**

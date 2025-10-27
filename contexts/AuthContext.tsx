@@ -114,11 +114,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null);
 
       if (session?.user) {
-        await fetchProfile(session.user.id);
+        console.log('[Auth] User signed in, fetching profile...');
+        // Fetch profile in background - don't block sync initialization
+        fetchProfile(session.user.id).catch((error) => {
+          console.error('[Auth] Error fetching profile:', error);
+        });
 
-        // Initialize sync in background - don't block UI
+        // Initialize sync immediately - don't wait for profile
+        console.log('[Auth] Initializing sync...');
         initializeSync().catch((error: Error) => {
-          console.error('Error initializing sync:', error);
+          console.error('[Auth] Error initializing sync:', error);
         });
       } else {
         setProfile(null);

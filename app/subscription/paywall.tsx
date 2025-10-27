@@ -212,11 +212,11 @@ export default function PaywallScreen() {
               30-Day Free Trial
             </ThemedText>
             <ThemedText type="title" style={styles.planPrice}>
-              {String('localizedPrice' in trialProduct ? trialProduct.localizedPrice : (trialProduct.price || '0'))}
+              {trialProduct.localizedPrice || trialProduct.price || '0'}
               <ThemedText style={styles.planPriceUnit}>/month</ThemedText>
             </ThemedText>
             <ThemedText style={[styles.planBilled, { color: colors.textSecondary }]}>
-              Free for 30 days, then {String('localizedPrice' in trialProduct ? trialProduct.localizedPrice : (trialProduct.price || '0'))}/month
+              Free for 30 days, then {trialProduct.localizedPrice || trialProduct.price || '0'}/month
             </ThemedText>
             <ThemedText style={[styles.planSavings, { color: colors.success }]}>
               Try it risk-free!
@@ -247,11 +247,11 @@ export default function PaywallScreen() {
               Annual
             </ThemedText>
             <ThemedText type="title" style={styles.planPrice}>
-              {String('localizedPrice' in annualProduct ? annualProduct.localizedPrice : (annualProduct.price || '0'))}
+              {annualProduct.localizedPrice || annualProduct.price || '0'}
               <ThemedText style={styles.planPriceUnit}>/year</ThemedText>
             </ThemedText>
             <ThemedText style={[styles.planBilled, { color: colors.textSecondary }]}>
-              {('currency' in annualProduct ? annualProduct.currency : 'USD')} {(parseFloat(String(annualProduct.price || '0')) / 12).toFixed(2)}/month
+              {annualProduct.currency || 'USD'} {(parseFloat(annualProduct.price || '0') / 12).toFixed(2)}/month
             </ThemedText>
             <ThemedText style={[styles.planSavings, { color: colors.success }]}>
               Save 33%
@@ -276,7 +276,7 @@ export default function PaywallScreen() {
               Monthly
             </ThemedText>
             <ThemedText type="title" style={styles.planPrice}>
-              {String('localizedPrice' in monthlyProduct ? monthlyProduct.localizedPrice : (monthlyProduct.price || '0'))}
+              {monthlyProduct.localizedPrice || monthlyProduct.price || '0'}
               <ThemedText style={styles.planPriceUnit}>/month</ThemedText>
             </ThemedText>
             <ThemedText style={[styles.planBilled, { color: colors.textSecondary }]}>

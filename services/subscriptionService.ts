@@ -1,8 +1,51 @@
 import { supabase } from './supabase';
 import { getCurrentUser } from './authService';
 
+// Type definitions for react-native-iap
+export interface Product {
+  productId: string;
+  price: string;
+  currency: string;
+  localizedPrice: string;
+  title: string;
+  description: string;
+  subscriptionPeriodNumberIOS?: string;
+  subscriptionPeriodUnitIOS?: string;
+  introductoryPrice?: string;
+}
+
+export interface Purchase {
+  productId: string;
+  transactionId: string;
+  transactionDate: number;
+  transactionReceipt: string;
+  purchaseToken?: string;
+  dataAndroid?: string;
+  signatureAndroid?: string;
+  autoRenewingAndroid?: boolean;
+  originalTransactionIdentifierIOS?: string;
+}
+
+export interface PurchaseError {
+  code: string;
+  message: string;
+  responseCode?: number;
+}
+
+interface RNIapModule {
+  initConnection: () => Promise<boolean>;
+  endConnection: () => Promise<void>;
+  getProducts: (skus: string[]) => Promise<Product[]>;
+  getSubscriptions: (skus: string[]) => Promise<Product[]>;
+  requestPurchase: (sku: string) => Promise<void>;
+  getAvailablePurchases: () => Promise<Purchase[]>;
+  finishTransaction: (options: { purchase: Purchase; isConsumable: boolean }) => Promise<void>;
+  purchaseUpdatedListener: (listener: (purchase: Purchase) => void) => { remove: () => void };
+  purchaseErrorListener: (listener: (error: PurchaseError) => void) => { remove: () => void };
+}
+
 // Conditional import to prevent crashes if module not available
-let RNIap: any = null;
+let RNIap: RNIapModule | null = null;
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -11,11 +54,6 @@ try {
 } catch (error) {
   console.warn('[Apple IAP] react-native-iap module not available:', error);
 }
-
-// Export types for compatibility
-export type Product = any;
-export type Purchase = any;
-export type PurchaseError = any;
 
 // Define your product IDs - these MUST match what you create in App Store Connect
 const PRODUCT_IDS = {
@@ -26,8 +64,8 @@ const PRODUCT_IDS = {
 
 const PRODUCT_IDS_LIST = Object.values(PRODUCT_IDS);
 
-let purchaseUpdateSubscription: any = null;
-let purchaseErrorSubscription: any = null;
+let purchaseUpdateSubscription: { remove: () => void } | null = null;
+let purchaseErrorSubscription: { remove: () => void } | null = null;
 let isIAPInitialized = false;
 
 /**
@@ -68,6 +106,11 @@ export async function initializeIAP(): Promise<boolean> {
  * Set up listeners for purchase updates
  */
 function setupPurchaseListeners() {
+  if (!RNIap) {
+    console.error('[Apple IAP] Cannot setup listeners - RNIap not available');
+    return;
+  }
+
   // Remove any existing listeners
   if (purchaseUpdateSubscription) {
     purchaseUpdateSubscription.remove();
@@ -77,7 +120,7 @@ function setupPurchaseListeners() {
   }
 
   // Listen for purchase updates
-  purchaseUpdateSubscription = RNIap.purchaseUpdatedListener(async (purchase: any) => {
+  purchaseUpdateSubscription = RNIap.purchaseUpdatedListener(async (purchase: Purchase) => {
     console.log('[Apple IAP] Purchase updated:', purchase);
 
     const receipt = purchase.transactionId;
@@ -100,7 +143,7 @@ function setupPurchaseListeners() {
   });
 
   // Listen for purchase errors
-  purchaseErrorSubscription = RNIap.purchaseErrorListener((error: any) => {
+  purchaseErrorSubscription = RNIap.purchaseErrorListener((error: PurchaseError) => {
     console.error('[Apple IAP] Purchase error:', error);
   });
 }
@@ -141,7 +184,7 @@ export async function cleanupIAP(): Promise<void> {
 /**
  * Get available subscription products
  */
-export async function getSubscriptionProducts(): Promise<any[] | null> {
+export async function getSubscriptionProducts(): Promise<Product[] | null> {
   if (!RNIap) {
     console.log('[Apple IAP] Module not available');
     return null;
@@ -202,6 +245,11 @@ export async function purchaseSubscription(
  * Check if user has active subscription
  */
 export async function hasActiveSubscription(): Promise<boolean> {
+  if (!RNIap) {
+    console.log('[Apple IAP] Module not available');
+    return false;
+  }
+
   try {
     // Get available purchases from Apple
     const purchases = await RNIap.getAvailablePurchases();
@@ -212,7 +260,7 @@ export async function hasActiveSubscription(): Promise<boolean> {
     }
 
     // Check if any purchase is one of our subscription products
-    const hasActiveSubscription = purchases.some((purchase: any) =>
+    const hasActiveSubscription = purchases.some((purchase: Purchase) =>
       PRODUCT_IDS_LIST.includes(purchase.productId)
     );
 
@@ -228,7 +276,12 @@ export async function hasActiveSubscription(): Promise<boolean> {
 /**
  * Get all purchases (for debugging/verification)
  */
-export async function getAllPurchases(): Promise<any[]> {
+export async function getAllPurchases(): Promise<Purchase[]> {
+  if (!RNIap) {
+    console.log('[Apple IAP] Module not available');
+    return [];
+  }
+
   try {
     const purchases = await RNIap.getAvailablePurchases();
     return purchases || [];
@@ -245,6 +298,14 @@ export async function restorePurchases(): Promise<{
   success: boolean;
   error: Error | null;
 }> {
+  if (!RNIap) {
+    console.log('[Apple IAP] Module not available');
+    return {
+      success: false,
+      error: new Error('IAP module not available'),
+    };
+  }
+
   try {
     const purchases = await RNIap.getAvailablePurchases();
 
@@ -258,7 +319,7 @@ export async function restorePurchases(): Promise<{
     console.log('[Apple IAP] Found purchases to restore:', purchases.length);
 
     // Update Supabase with restored purchases
-    const subscriptionPurchase = purchases.find((purchase: any) =>
+    const subscriptionPurchase = purchases.find((purchase: Purchase) =>
       PRODUCT_IDS_LIST.includes(purchase.productId)
     );
 
@@ -280,7 +341,7 @@ export async function restorePurchases(): Promise<{
 /**
  * Verify Apple IAP receipt with Supabase Edge Function
  */
-async function verifyAppleReceipt(purchase: any): Promise<{
+async function verifyAppleReceipt(purchase: Purchase): Promise<{
   verified: boolean;
   error?: string;
 }> {
@@ -341,7 +402,7 @@ async function verifyAppleReceipt(purchase: any): Promise<{
  * Update Supabase profile with subscription status from Apple
  * Now includes proper receipt verification
  */
-async function updateSupabaseSubscription(purchase: any): Promise<void> {
+async function updateSupabaseSubscription(purchase: Purchase): Promise<void> {
   try {
     const user = await getCurrentUser();
     if (!user) {

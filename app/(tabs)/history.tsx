@@ -94,12 +94,13 @@ export default function HistoryScreen() {
         notes: editNotes,
       });
 
-      // Also update in Supabase (in background, ignore errors)
+      // Also update in Supabase (in background, log errors but don't block)
       updateTrip(editingTrip.id, {
         purpose: editPurpose,
         notes: editNotes,
       }).catch(error => {
-        console.log('[History] Failed to update in Supabase (will sync later):', error.message);
+        console.error('[History] Failed to update in Supabase (will sync later):', error instanceof Error ? error.message : String(error));
+        // Local update already succeeded, sync service will retry later
       });
 
       setEditModalVisible(false);
@@ -122,9 +123,10 @@ export default function HistoryScreen() {
             // Delete from local database first
             await deleteLocalTrip(id);
 
-            // Also delete from Supabase (in background, ignore errors)
+            // Also delete from Supabase (in background, log errors but don't block)
             deleteTrip(id).catch(error => {
-              console.log('[History] Failed to delete from Supabase (will sync later):', error.message);
+              console.error('[History] Failed to delete from Supabase (will sync later):', error instanceof Error ? error.message : String(error));
+              // Local delete already succeeded, sync service will retry later
             });
 
             // Reload trips from local database

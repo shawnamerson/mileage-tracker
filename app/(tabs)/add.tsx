@@ -48,14 +48,13 @@ export default function AddTripScreen() {
       checkActiveTrip();
 
       // Set up interval to update active trip data
+      // Always check - the function is fast when there's no active trip
       const interval = setInterval(() => {
-        if (tracking) {
-          checkActiveTrip();
-        }
+        checkActiveTrip();
       }, 2000);
 
       return () => clearInterval(interval);
-    }, [tracking])
+    }, [])
   );
 
   const checkActiveTrip = async () => {

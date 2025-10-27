@@ -80,7 +80,13 @@ function RootNavigator() {
             console.log('[App] Auto-tracking not enabled');
           }
         } catch (error) {
-          console.error('[App] Error restarting auto-tracking:', error);
+          // Suppress location permission errors in Expo Go (expected)
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (errorMessage.includes('NSLocation') || errorMessage.includes('Info.plist')) {
+            console.log('[App] ℹ️ Auto-tracking unavailable in Expo Go (use development build)');
+          } else {
+            console.error('[App] Error restarting auto-tracking:', error);
+          }
         }
       };
 
@@ -99,7 +105,10 @@ function RootNavigator() {
         return;
       }
 
-      console.log('[App] Starting navigation logic...');
+      console.log('[App] Auth loaded - showing UI immediately');
+
+      // Set ready immediately - don't block on slow checks
+      setIsReady(true);
 
       try {
         const inAuthGroup = segments[0] === 'auth';
@@ -111,13 +120,24 @@ function RootNavigator() {
 
         // Not authenticated - redirect to sign-up for new users
         if (!user && !inAuthGroup) {
+          console.log('[App] Not authenticated - redirecting to sign-up');
           router.replace('/auth/sign-up');
           return;
         }
 
-        // Authenticated - check onboarding and subscription
+        // Authenticated - navigate to dashboard immediately, check permissions in background
         if (user) {
-          console.log('[App] User authenticated, checking onboarding status...');
+          // First navigate to dashboard if not already there (optimistic)
+          if (inAuthGroup) {
+            console.log('[App] Authenticated user on auth screen - redirecting to dashboard');
+            router.replace('/(tabs)');
+          } else if (!inTabs && !inOnboarding && !inSubscription) {
+            console.log('[App] Authenticated user not on main screens - redirecting to dashboard');
+            router.replace('/(tabs)');
+          }
+
+          // Now check onboarding/paywall in BACKGROUND (non-blocking)
+          console.log('[App] Running background checks for onboarding/paywall...');
 
           // Check onboarding with timeout protection
           const completed = await withTimeoutFallback(
@@ -130,12 +150,15 @@ function RootNavigator() {
           console.log('[App] Onboarding completed:', completed);
 
           if (!completed && !inOnboarding) {
-            // Not completed onboarding - redirect to onboarding
-            console.log('[App] Redirecting to onboarding...');
+            // Not completed onboarding - redirect away from dashboard
+            console.log('[App] Onboarding required - redirecting...');
             router.replace('/onboarding');
-          } else if (completed) {
-            console.log('[App] Checking paywall status...');
-            // Check if should show paywall with timeout protection
+            return;
+          }
+
+          // Check paywall only if onboarding is complete
+          if (completed) {
+            console.log('[App] Checking paywall status in background...');
             const showPaywall = await withTimeoutFallback(
               shouldShowPaywall(),
               TIMEOUTS.QUICK,
@@ -146,34 +169,33 @@ function RootNavigator() {
             console.log('[App] Paywall check result:', showPaywall);
 
             if (showPaywall && !inSubscription) {
-              // Trial expired, redirect to paywall
-              console.log('[App] Redirecting to paywall...');
+              // Trial expired - redirect to paywall
+              console.log('[App] Paywall required - redirecting...');
               router.replace('/subscription/paywall');
-            } else if (!showPaywall && !inTabs && !inAuthGroup && !inSubscription) {
-              // Has access, completed onboarding - redirect to tabs
-              console.log('[App] Redirecting to tabs (completed onboarding, no paywall)...');
-              router.replace('/(tabs)');
-            } else if (inAuthGroup) {
-              // Already authenticated but on auth screen - redirect to tabs
-              console.log('[App] Redirecting to tabs (already authenticated)...');
-              router.replace('/(tabs)');
             } else {
-              console.log('[App] No navigation needed - already in correct location');
+              console.log('[App] Background checks complete - user has full access');
             }
           }
         }
       } catch (error) {
         console.error('[App] Error handling navigation:', error);
-      } finally {
-        console.log('[App] Setting isReady to true...');
-        setIsReady(true);
       }
     }
 
     handleNavigation();
   }, [user, loading]); // Removed 'segments' - only run on auth state changes
 
-  if (!isReady || loading) {
+  // Only show loading screen while auth is loading (fast)
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <LoadingAnimation text="Loading MileMate..." />
+      </View>
+    );
+  }
+
+  // Once auth is loaded, show UI immediately (even if onboarding/paywall checks are pending)
+  if (!isReady) {
     return (
       <View style={styles.loadingContainer}>
         <LoadingAnimation text="Loading MileMate..." />

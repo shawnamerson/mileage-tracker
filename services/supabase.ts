@@ -37,12 +37,18 @@ const SECURE_STORE_MAX_SIZE = 2000; // Leave some buffer
 const ExpoSecureStoreAdapter = {
   getItem: async (key: string) => {
     try {
+      console.log('[SecureStore] getItem called for key:', key);
       // Try SecureStore first
+      console.log('[SecureStore] Trying SecureStore.getItemAsync...');
       const value = await SecureStore.getItemAsync(key);
+      console.log('[SecureStore] SecureStore returned:', value ? `value (${value.length} bytes)` : 'null');
       if (value) return value;
 
       // Fallback to AsyncStorage for large values
-      return await AsyncStorage.getItem(key);
+      console.log('[SecureStore] Trying AsyncStorage.getItem...');
+      const asyncValue = await AsyncStorage.getItem(key);
+      console.log('[SecureStore] AsyncStorage returned:', asyncValue ? `value (${asyncValue.length} bytes)` : 'null');
+      return asyncValue;
     } catch (error) {
       console.error('[SecureStore] Error getting item:', error);
       return null;
@@ -89,7 +95,8 @@ const ExpoSecureStoreAdapter = {
 // Custom fetch with timeout
 const fetchWithTimeout = async (url: RequestInfo | URL, options: RequestInit = {}) => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout for all requests
+  // Increased timeout from 10s to 30s to handle slower networks and batch operations
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for all requests
 
   try {
     const response = await fetch(url, {
@@ -101,7 +108,7 @@ const fetchWithTimeout = async (url: RequestInfo | URL, options: RequestInit = {
   } catch (error) {
     clearTimeout(timeoutId);
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Request timed out after 10 seconds');
+      throw new Error('Request timed out after 30 seconds');
     }
     throw error;
   }

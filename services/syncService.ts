@@ -311,21 +311,29 @@ export async function processQueue(): Promise<{
 /**
  * Upload a trip to Supabase with conflict resolution
  */
-export async function uploadTrip(trip: Trip, addToQueueOnFailure = true): Promise<boolean> {
+export async function uploadTrip(trip: Trip, addToQueueOnFailure = true, userId?: string): Promise<boolean> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('[Sync] No user logged in, cannot upload trip');
-      return false;
+    console.log('[Sync] uploadTrip: Starting upload for trip', trip.id);
+
+    // Use provided userId or fetch it (for backward compatibility)
+    let actualUserId = userId;
+    if (!actualUserId) {
+      const user = await getCurrentUser();
+      if (!user) {
+        console.error('[Sync] No user logged in, cannot upload trip');
+        return false;
+      }
+      actualUserId = user.id;
     }
 
-    const cloudTrip = tripToCloudTrip(trip, user.id);
+    const cloudTrip = tripToCloudTrip(trip, actualUserId);
+    console.log('[Sync] uploadTrip: Checking if trip exists in cloud...');
 
     // Check if trip already exists in cloud by matching start_time and end_time
     const { data: existing, error: fetchError } = await supabase
       .from('trips')
       .select('id, updated_at')
-      .eq('user_id', user.id)
+      .eq('user_id', actualUserId)
       .eq('start_time', trip.start_time)
       .eq('end_time', trip.end_time)
       .maybeSingle();
@@ -437,37 +445,117 @@ export async function createTripInCloud(trip: Trip, addToQueueOnFailure = true):
  */
 export async function uploadAllTrips(): Promise<{ success: number; failed: number }> {
   try {
-    // Get trips directly from Supabase to avoid circular dependency
+    console.log('[Sync] uploadAllTrips: Getting current user...');
+    // Get trips from LOCAL SQLite database (not from Supabase!)
     const user = await getCurrentUser();
     if (!user) {
       console.error('[Sync] No user logged in');
       return { success: 0, failed: 0 };
     }
+    console.log('[Sync] uploadAllTrips: User found:', user.id);
 
-    const { data: trips, error } = await supabase
-      .from('trips')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('is_deleted', false)
-      .order('start_time', { ascending: false });
+    // Import getLocalTrips to fetch from local database
+    console.log('[Sync] uploadAllTrips: Importing getLocalTrips...');
+    const { getLocalTrips } = await import('./localDatabase');
+    console.log('[Sync] uploadAllTrips: Fetching local trips...');
+    const localTrips = await getLocalTrips(user.id);
+    console.log('[Sync] uploadAllTrips: Fetched', localTrips.length, 'local trips');
 
-    if (error) {
-      console.error('[Sync] Error fetching trips:', error);
+    if (!localTrips || localTrips.length === 0) {
+      console.log('[Sync] No local trips to upload');
       return { success: 0, failed: 0 };
     }
 
-    const tripList = (trips || []).map(cloudTripToTrip);
+    console.log('[Sync] uploadAllTrips: Converting LocalTrip to Trip format...');
+    // Convert LocalTrip to Trip format
+    const tripList: Trip[] = localTrips.map(localTrip => ({
+      id: localTrip.id,
+      user_id: localTrip.user_id,
+      start_location: localTrip.start_location,
+      end_location: localTrip.end_location,
+      start_latitude: localTrip.start_latitude,
+      start_longitude: localTrip.start_longitude,
+      end_latitude: localTrip.end_latitude,
+      end_longitude: localTrip.end_longitude,
+      distance: localTrip.distance,
+      start_time: localTrip.start_time,
+      end_time: localTrip.end_time,
+      purpose: localTrip.purpose,
+      notes: localTrip.notes,
+      created_at: new Date(localTrip.created_at).toISOString(),
+      updated_at: new Date(localTrip.updated_at).toISOString(),
+    }));
+    console.log('[Sync] uploadAllTrips: Conversion complete');
+
     let success = 0;
     let failed = 0;
 
-    console.log(`[Sync] Uploading ${tripList.length} local trips to cloud...`);
+    console.log(`[Sync] uploadAllTrips: Starting upload of ${tripList.length} trips to cloud...`);
+
+    // OPTIMIZATION: Batch check which trips already exist in cloud
+    console.log('[Sync] uploadAllTrips: Checking which trips already exist in cloud...');
+    const tripKeys = tripList.map(t => ({ start_time: t.start_time, end_time: t.end_time }));
+
+    // Query for all existing trips at once (much faster than individual queries)
+    const { data: existingTrips, error: existCheckError } = await supabase
+      .from('trips')
+      .select('id, start_time, end_time, updated_at')
+      .eq('user_id', user.id)
+      .eq('is_deleted', false);
+
+    if (existCheckError) {
+      console.error('[Sync] Error checking existing trips:', existCheckError);
+      // Continue anyway, will be slower but still work
+    }
+
+    // Create a map for fast lookups
+    const existingMap = new Map<string, any>();
+    if (existingTrips) {
+      existingTrips.forEach(trip => {
+        const key = `${trip.start_time}-${trip.end_time}`;
+        existingMap.set(key, trip);
+      });
+      console.log(`[Sync] uploadAllTrips: Found ${existingTrips.length} existing trips in cloud`);
+    }
 
     // Upload trips in parallel for better performance (batch of 5 at a time)
     const batchSize = 5;
     for (let i = 0; i < tripList.length; i += batchSize) {
       const batch = tripList.slice(i, i + batchSize);
+      console.log(`[Sync] uploadAllTrips: Uploading batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(tripList.length / batchSize)}`);
+
       const results = await Promise.allSettled(
-        batch.map((trip) => uploadTrip(trip))
+        batch.map(async (trip) => {
+          const key = `${trip.start_time}-${trip.end_time}`;
+          const existing = existingMap.get(key);
+
+          try {
+            const cloudTrip = tripToCloudTrip(trip, user.id);
+
+            if (existing) {
+              // Update existing trip
+              const { error } = await supabase
+                .from('trips')
+                .update(cloudTrip)
+                .eq('id', existing.id);
+
+              if (error) throw error;
+              console.log('[Sync] ✅ Updated trip in cloud:', trip.id);
+            } else {
+              // Insert new trip
+              const { error } = await supabase
+                .from('trips')
+                .insert([cloudTrip]);
+
+              if (error) throw error;
+              console.log('[Sync] ✅ Uploaded new trip to cloud:', trip.id);
+            }
+            return true;
+          } catch (error) {
+            console.error(`[Sync] Failed to upload trip ${trip.id}:`, error);
+            return false;
+          }
+        })
       );
 
       results.forEach((result, index) => {
@@ -497,11 +585,13 @@ export async function uploadAllTrips(): Promise<{ success: number; failed: numbe
  */
 export async function downloadTrips(): Promise<Trip[]> {
   try {
+    console.log('[Sync] downloadTrips: Getting current user...');
     const user = await getCurrentUser();
     if (!user) {
       console.error('[Sync] No user logged in, cannot download trips');
       return [];
     }
+    console.log('[Sync] downloadTrips: User found, querying Supabase...');
 
     const { data, error } = await supabase
       .from('trips')
@@ -580,7 +670,7 @@ export async function syncTrips(): Promise<{
       'Upload local trips'
     ).catch((error) => {
       if (error instanceof TimeoutError) {
-        console.warn('[Sync] Upload timed out after 30s');
+        console.warn(`[Sync] Upload timed out after ${TIMEOUTS.LONG / 1000}s`);
         errors.push('Upload timed out - trips queued for later');
         return { success: 0, failed: 0 };
       }
@@ -599,7 +689,7 @@ export async function syncTrips(): Promise<{
       'Download cloud trips'
     ).catch((error) => {
       if (error instanceof TimeoutError) {
-        console.warn('[Sync] Download timed out after 30s');
+        console.warn(`[Sync] Download timed out after ${TIMEOUTS.LONG / 1000}s`);
         errors.push('Download timed out - will retry next sync');
         return [];
       }
