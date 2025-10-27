@@ -13,6 +13,7 @@ import { ThemedView } from '@/components/themed-view';
 import { LoadingAnimation } from '@/components/LoadingAnimation';
 import { getAllTrips, deleteTrip, updateTrip, Trip } from '@/services/tripService';
 import { getLocalTrips, deleteLocalTrip, updateLocalTrip, LocalTrip } from '@/services/localDatabase';
+import { onSyncComplete } from '@/services/syncService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
@@ -71,6 +72,22 @@ export default function HistoryScreen() {
       loadTrips();
     }, [user])
   );
+
+  // Auto-reload when sync completes
+  useEffect(() => {
+    if (!user) return;
+
+    console.log('[History] Subscribing to sync completion events');
+    const unsubscribe = onSyncComplete(() => {
+      console.log('[History] Sync completed - reloading trips...');
+      loadTrips();
+    });
+
+    return () => {
+      console.log('[History] Unsubscribing from sync completion events');
+      unsubscribe();
+    };
+  }, [user]);
 
   const onRefresh = () => {
     setRefreshing(true);

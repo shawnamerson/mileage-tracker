@@ -16,6 +16,7 @@ import {
   LocalTrip,
 } from '@/services/localDatabase';
 import { getRateForYear } from '@/services/mileageRateService';
+import { onSyncComplete } from '@/services/syncService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
@@ -110,6 +111,22 @@ export default function DashboardScreen() {
       }
     }, [authLoading, user])
   );
+
+  // Auto-reload when sync completes
+  useEffect(() => {
+    if (!user) return;
+
+    console.log('[Dashboard] Subscribing to sync completion events');
+    const unsubscribe = onSyncComplete(() => {
+      console.log('[Dashboard] Sync completed - reloading data...');
+      loadData();
+    });
+
+    return () => {
+      console.log('[Dashboard] Unsubscribing from sync completion events');
+      unsubscribe();
+    };
+  }, [user]);
 
   const onRefresh = () => {
     setRefreshing(true);

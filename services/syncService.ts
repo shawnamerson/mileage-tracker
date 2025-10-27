@@ -24,6 +24,30 @@ const INITIAL_RETRY_DELAY = 1000; // 1 second
 let isSyncInProgress = false;
 let deferredSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 
+// Sync completion listeners
+type SyncCompleteListener = () => void;
+const syncCompleteListeners: Set<SyncCompleteListener> = new Set();
+
+// Subscribe to sync completion events
+export function onSyncComplete(listener: SyncCompleteListener): () => void {
+  syncCompleteListeners.add(listener);
+  // Return unsubscribe function
+  return () => {
+    syncCompleteListeners.delete(listener);
+  };
+}
+
+// Notify all listeners that sync completed
+function notifySyncComplete() {
+  syncCompleteListeners.forEach(listener => {
+    try {
+      listener();
+    } catch (error) {
+      console.error('[Sync] Error in sync complete listener:', error);
+    }
+  });
+}
+
 // Sync status tracking
 export interface SyncStatus {
   isSyncing: boolean;
@@ -801,6 +825,8 @@ export async function syncTrips(): Promise<{
   } finally {
     // Always reset the sync flag when done
     isSyncInProgress = false;
+    // Notify listeners that sync completed
+    notifySyncComplete();
   }
 }
 
