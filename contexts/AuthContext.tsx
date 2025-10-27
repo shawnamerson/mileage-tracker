@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase, Profile } from '@/services/supabase';
-import { getUserProfile } from '@/services/authService';
+import { getUserProfile, signOut as authSignOut } from '@/services/authService';
 import { initializeSync } from '@/services/syncService';
+import { clearLocalDatabase } from '@/services/localDatabase';
 
 interface AuthContextType {
   session: Session | null;
@@ -56,7 +57,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setTimeout(() => reject(new Error('Sign out timeout')), 5000)
       );
 
-      const signOutPromise = supabase.auth.signOut();
+      // Use authService.signOut() which clears user cache
+      const signOutPromise = authSignOut();
 
       await Promise.race([signOutPromise, timeoutPromise]).catch(error => {
         console.log('[Auth] Supabase sign out failed (continuing anyway):', error.message);
@@ -66,6 +68,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(null);
       setUser(null);
       setProfile(null);
+
+      // Clear local SQLite database to prevent orphaned data
+      console.log('[Auth] Clearing local database...');
+      await clearLocalDatabase().catch(error => {
+        console.error('[Auth] Error clearing local database (continuing):', error);
+      });
+
       console.log('[Auth] ✅ Signed out successfully');
     } catch (error) {
       console.error('[Auth] Error signing out:', error);
@@ -73,6 +82,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(null);
       setUser(null);
       setProfile(null);
+      // Attempt to clear local database even on error
+      clearLocalDatabase().catch(() => {});
     }
   };
 
