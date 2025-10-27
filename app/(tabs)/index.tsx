@@ -16,7 +16,7 @@ import {
   LocalTrip,
 } from '@/services/localDatabase';
 import { getRateForYear } from '@/services/mileageRateService';
-import { onSyncComplete } from '@/services/syncService';
+import { onSyncComplete, onSyncStatusChange, isSyncing } from '@/services/syncService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
@@ -29,6 +29,7 @@ export default function DashboardScreen() {
   const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [todayStats, setTodayStats] = useState({
     totalTrips: 0,
     totalDistance: 0,
@@ -112,19 +113,31 @@ export default function DashboardScreen() {
     }, [authLoading, user])
   );
 
-  // Auto-reload when sync completes
+  // Track sync status and auto-reload when sync completes
   useEffect(() => {
     if (!user) return;
 
-    console.log('[Dashboard] Subscribing to sync completion events');
-    const unsubscribe = onSyncComplete(() => {
+    // Set initial syncing state
+    setSyncing(isSyncing());
+
+    console.log('[Dashboard] Subscribing to sync events');
+
+    // Subscribe to sync status changes
+    const unsubscribeStatus = onSyncStatusChange((isSyncingNow) => {
+      console.log('[Dashboard] Sync status changed:', isSyncingNow);
+      setSyncing(isSyncingNow);
+    });
+
+    // Subscribe to sync completion
+    const unsubscribeComplete = onSyncComplete(() => {
       console.log('[Dashboard] Sync completed - reloading data...');
       loadData();
     });
 
     return () => {
-      console.log('[Dashboard] Unsubscribing from sync completion events');
-      unsubscribe();
+      console.log('[Dashboard] Unsubscribing from sync events');
+      unsubscribeStatus();
+      unsubscribeComplete();
     };
   }, [user]);
 
@@ -250,9 +263,15 @@ export default function DashboardScreen() {
 
         {recentTrips.length === 0 ? (
           <ThemedView style={styles.emptyState}>
-            <ThemedText style={[styles.emptyStateText, { color: colors.textSecondary }]}>
-              No trips yet. Start tracking your mileage!
-            </ThemedText>
+            {syncing ? (
+              <>
+                <LoadingAnimation text="Syncing your trips..." />
+              </>
+            ) : (
+              <ThemedText style={[styles.emptyStateText, { color: colors.textSecondary }]}>
+                No trips yet. Start tracking your mileage!
+              </ThemedText>
+            )}
           </ThemedView>
         ) : (
           <ThemedView style={styles.tripsList}>

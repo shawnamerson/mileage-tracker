@@ -24,9 +24,12 @@ const INITIAL_RETRY_DELAY = 1000; // 1 second
 let isSyncInProgress = false;
 let deferredSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 
-// Sync completion listeners
+// Sync event listeners
 type SyncCompleteListener = () => void;
+type SyncStatusChangeListener = (isSyncing: boolean) => void;
+
 const syncCompleteListeners: Set<SyncCompleteListener> = new Set();
+const syncStatusChangeListeners: Set<SyncStatusChangeListener> = new Set();
 
 // Subscribe to sync completion events
 export function onSyncComplete(listener: SyncCompleteListener): () => void {
@@ -34,6 +37,15 @@ export function onSyncComplete(listener: SyncCompleteListener): () => void {
   // Return unsubscribe function
   return () => {
     syncCompleteListeners.delete(listener);
+  };
+}
+
+// Subscribe to sync status changes (started/stopped)
+export function onSyncStatusChange(listener: SyncStatusChangeListener): () => void {
+  syncStatusChangeListeners.add(listener);
+  // Return unsubscribe function
+  return () => {
+    syncStatusChangeListeners.delete(listener);
   };
 }
 
@@ -46,6 +58,22 @@ function notifySyncComplete() {
       console.error('[Sync] Error in sync complete listener:', error);
     }
   });
+}
+
+// Notify all listeners that sync status changed
+function notifySyncStatusChange(isSyncing: boolean) {
+  syncStatusChangeListeners.forEach(listener => {
+    try {
+      listener(isSyncing);
+    } catch (error) {
+      console.error('[Sync] Error in sync status change listener:', error);
+    }
+  });
+}
+
+// Get current sync status (for initial state)
+export function isSyncing(): boolean {
+  return isSyncInProgress;
 }
 
 // Sync status tracking
@@ -661,6 +689,7 @@ export async function syncTrips(): Promise<{
   }
 
   isSyncInProgress = true;
+  notifySyncStatusChange(true); // Notify listeners sync started
   await updateSyncStatus({ isSyncing: true, lastSyncError: null });
   const errors: string[] = [];
 
@@ -825,6 +854,7 @@ export async function syncTrips(): Promise<{
   } finally {
     // Always reset the sync flag when done
     isSyncInProgress = false;
+    notifySyncStatusChange(false); // Notify listeners sync stopped
     // Notify listeners that sync completed
     notifySyncComplete();
   }
