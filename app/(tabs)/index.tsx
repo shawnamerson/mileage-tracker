@@ -223,21 +223,21 @@ export default function DashboardScreen() {
 
         <ThemedView style={[styles.metricsRow, { backgroundColor: 'transparent' }]}>
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: colors.success }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.info }]}>
               {todayStats.totalTrips}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Trips</ThemedText>
           </ThemedView>
 
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: colors.success }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.warning }]}>
               {todayStats.totalDistance.toFixed(1)}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Miles</ThemedText>
           </ThemedView>
 
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: colors.success }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.personal }]}>
               {todayStats.businessTrips}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Business</ThemedText>

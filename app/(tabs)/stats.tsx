@@ -286,21 +286,21 @@ export default function StatsScreen() {
 
         <ThemedView style={[styles.metricsRow, { backgroundColor: 'transparent' }]}>
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: colors.success }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.info }]}>
               {todayStats.totalTrips}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Trips</ThemedText>
           </ThemedView>
 
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: colors.success }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.warning }]}>
               {todayStats.totalDistance.toFixed(1)}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Miles</ThemedText>
           </ThemedView>
 
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: colors.success }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.personal }]}>
               {todayStats.businessTrips}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Business</ThemedText>
@@ -321,7 +321,7 @@ export default function StatsScreen() {
 
         <ThemedView style={[styles.metricsRow, { backgroundColor: 'transparent' }]}>
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: colors.primary }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.medical }]}>
               {monthStats.totalTrips}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Trips</ThemedText>
@@ -335,7 +335,7 @@ export default function StatsScreen() {
           </ThemedView>
 
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: colors.primary }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.warning }]}>
               {monthStats.businessTrips}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Business</ThemedText>
@@ -356,21 +356,21 @@ export default function StatsScreen() {
 
         <ThemedView style={[styles.metricsRow, { backgroundColor: 'transparent' }]}>
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: '#A78BFA' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.personal }]}>
               {yearStats.totalTrips}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Trips</ThemedText>
           </ThemedView>
 
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: '#A78BFA' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.info }]}>
               {yearStats.totalDistance.toFixed(1)}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Miles</ThemedText>
           </ThemedView>
 
           <ThemedView style={[styles.metricItem, { backgroundColor: 'transparent' }]}>
-            <ThemedText style={[styles.metricValue, { color: '#A78BFA' }]}>
+            <ThemedText style={[styles.metricValue, { color: colors.warning }]}>
               {yearStats.businessTrips}
             </ThemedText>
             <ThemedText style={styles.metricLabel}>Business</ThemedText>
