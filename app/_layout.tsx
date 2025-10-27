@@ -1,8 +1,8 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { useEffect, useState, useRef } from 'react';
+import { View, StyleSheet, AppState, AppStateStatus } from 'react-native';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -14,6 +14,7 @@ import { initLocalDatabase } from '@/services/localDatabase';
 import { LoadingAnimation } from '@/components/LoadingAnimation';
 import { withTimeoutFallback, TIMEOUTS } from '@/utils/timeout';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { syncTrips } from '@/services/syncService';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -24,6 +25,8 @@ function RootNavigator() {
   const segments = useSegments();
   const { user, loading } = useAuth();
   const [isReady, setIsReady] = useState(false);
+  const appState = useRef(AppState.currentState);
+  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Initialize local database and IAP on app start
   useEffect(() => {
@@ -93,6 +96,74 @@ function RootNavigator() {
       // Delay slightly to ensure permissions are ready
       setTimeout(restartAutoTracking, 1000);
     }
+  }, [user]);
+
+  // Periodic sync: resume sync and 5-minute interval
+  useEffect(() => {
+    if (!user) return;
+
+    // Helper to trigger sync
+    const triggerSync = async (reason: string) => {
+      try {
+        console.log(`[App] ${reason} - triggering sync...`);
+        await syncTrips();
+        console.log(`[App] ${reason} sync completed`);
+      } catch (error) {
+        console.error(`[App] Error during ${reason} sync:`, error);
+      }
+    };
+
+    // Start periodic sync (5 minutes)
+    const startPeriodicSync = () => {
+      // Clear any existing interval
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+      }
+
+      console.log('[App] Starting periodic sync (every 5 minutes)');
+      syncIntervalRef.current = setInterval(() => {
+        triggerSync('Periodic (5min)');
+      }, 5 * 60 * 1000); // 5 minutes
+    };
+
+    // Stop periodic sync
+    const stopPeriodicSync = () => {
+      if (syncIntervalRef.current) {
+        console.log('[App] Stopping periodic sync');
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+    };
+
+    // Listen for app state changes
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      const previousState = appState.current;
+      appState.current = nextAppState;
+
+      console.log(`[App] App state changed: ${previousState} → ${nextAppState}`);
+
+      // App came to foreground
+      if (previousState.match(/inactive|background/) && nextAppState === 'active') {
+        triggerSync('App resume');
+        startPeriodicSync();
+      }
+
+      // App went to background
+      if (previousState === 'active' && nextAppState.match(/inactive|background/)) {
+        stopPeriodicSync();
+      }
+    });
+
+    // Start periodic sync if app is already active
+    if (AppState.currentState === 'active') {
+      startPeriodicSync();
+    }
+
+    // Cleanup
+    return () => {
+      subscription.remove();
+      stopPeriodicSync();
+    };
   }, [user]);
 
   useEffect(() => {
