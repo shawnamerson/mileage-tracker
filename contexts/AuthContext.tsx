@@ -86,13 +86,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Get initial session
     supabase.auth.getSession()
-      .then(async ({ data: { session } }) => {
+      .then(({ data: { session } }) => {
         clearTimeout(initTimeout);
         setSession(session);
         setUser(session?.user ?? null);
 
         if (session?.user) {
-          await fetchProfile(session.user.id);
+          // Fetch profile in background - don't block initial load
+          fetchProfile(session.user.id).catch((error) => {
+            console.error('[Auth] Error fetching initial profile:', error);
+          });
           // Sync will be initialized by onAuthStateChange listener
         }
 
