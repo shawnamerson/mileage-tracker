@@ -18,12 +18,6 @@ export interface LocalTrip {
   notes: string;
   created_at: number;
   updated_at: number;
-  synced: boolean; // Track if synced to Supabase
-}
-
-// Type for raw SQLite query results (SQLite returns 0/1 for booleans)
-interface LocalTripRow extends Omit<LocalTrip, 'synced'> {
-  synced: number; // SQLite stores booleans as 0 or 1
 }
 
 /**
@@ -52,13 +46,11 @@ export async function initLocalDatabase(): Promise<void> {
         purpose TEXT NOT NULL,
         notes TEXT DEFAULT '',
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        synced INTEGER DEFAULT 0
+        updated_at INTEGER NOT NULL
       );
 
       CREATE INDEX IF NOT EXISTS idx_trips_user_id ON trips(user_id);
       CREATE INDEX IF NOT EXISTS idx_trips_start_time ON trips(start_time);
-      CREATE INDEX IF NOT EXISTS idx_trips_synced ON trips(synced);
     `);
 
     console.log('[LocalDB] ✅ Database initialized successfully');
@@ -77,15 +69,12 @@ export async function getLocalTrips(userId: string): Promise<LocalTrip[]> {
   }
 
   try {
-    const result = await db!.getAllAsync<LocalTripRow>(
+    const result = await db!.getAllAsync<LocalTrip>(
       'SELECT * FROM trips WHERE user_id = ? ORDER BY start_time DESC',
       [userId]
     );
 
-    return result.map(trip => ({
-      ...trip,
-      synced: trip.synced === 1,
-    }));
+    return result;
   } catch (error) {
     console.error('[LocalDB] Error getting trips:', error);
     return [];
@@ -105,15 +94,12 @@ export async function getLocalTripsByDateRange(
   }
 
   try {
-    const result = await db!.getAllAsync<LocalTripRow>(
+    const result = await db!.getAllAsync<LocalTrip>(
       'SELECT * FROM trips WHERE user_id = ? AND start_time >= ? AND start_time <= ? ORDER BY start_time DESC',
       [userId, startTime, endTime]
     );
 
-    return result.map(trip => ({
-      ...trip,
-      synced: trip.synced === 1,
-    }));
+    return result;
   } catch (error) {
     console.error('[LocalDB] Error getting trips by date range:', error);
     return [];
@@ -123,7 +109,7 @@ export async function getLocalTripsByDateRange(
 /**
  * Save trip to local database
  */
-export async function saveLocalTrip(trip: Omit<LocalTrip, 'created_at' | 'updated_at' | 'synced'>): Promise<void> {
+export async function saveLocalTrip(trip: Omit<LocalTrip, 'created_at' | 'updated_at'>): Promise<void> {
   if (!db) {
     await initLocalDatabase();
   }
@@ -136,8 +122,8 @@ export async function saveLocalTrip(trip: Omit<LocalTrip, 'created_at' | 'update
         id, user_id, start_location, end_location,
         start_latitude, start_longitude, end_latitude, end_longitude,
         distance, start_time, end_time, purpose, notes,
-        created_at, updated_at, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         trip.id,
         trip.user_id,
@@ -161,50 +147,6 @@ export async function saveLocalTrip(trip: Omit<LocalTrip, 'created_at' | 'update
   } catch (error) {
     console.error('[LocalDB] Error saving trip:', error);
     throw error;
-  }
-}
-
-/**
- * Mark trip as synced
- */
-export async function markTripAsSynced(tripId: string): Promise<void> {
-  if (!db) {
-    await initLocalDatabase();
-  }
-
-  try {
-    await db!.runAsync(
-      'UPDATE trips SET synced = 1, updated_at = ? WHERE id = ?',
-      [Date.now(), tripId]
-    );
-
-    console.log('[LocalDB] ✅ Trip marked as synced:', tripId);
-  } catch (error) {
-    console.error('[LocalDB] Error marking trip as synced:', error);
-  }
-}
-
-/**
- * Get unsynced trips
- */
-export async function getUnsyncedTrips(userId: string): Promise<LocalTrip[]> {
-  if (!db) {
-    await initLocalDatabase();
-  }
-
-  try {
-    const result = await db!.getAllAsync<LocalTripRow>(
-      'SELECT * FROM trips WHERE user_id = ? AND synced = 0 ORDER BY created_at ASC',
-      [userId]
-    );
-
-    return result.map(trip => ({
-      ...trip,
-      synced: trip.synced === 1,
-    }));
-  } catch (error) {
-    console.error('[LocalDB] Error getting unsynced trips:', error);
-    return [];
   }
 }
 

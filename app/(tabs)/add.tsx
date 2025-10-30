@@ -40,6 +40,9 @@ export default function AddTripScreen() {
   const [notes, setNotes] = useState('');
   const [recoveryAlertShown, setRecoveryAlertShown] = useState(false);
 
+  // Prevent race conditions in trip recovery
+  const isProcessingRecovery = React.useRef(false);
+
   const purposes = ['business', 'personal', 'medical', 'charity', 'other'] as const;
 
   // Check for active trip on mount and when screen is focused
@@ -58,6 +61,12 @@ export default function AddTripScreen() {
   );
 
   const checkActiveTrip = async () => {
+    // Prevent overlapping recovery checks (race condition fix)
+    if (isProcessingRecovery.current) {
+      console.log('[Add] Skipping checkActiveTrip - recovery already in progress');
+      return;
+    }
+
     const isActive = await isTrackingActive();
     const trip = await getActiveTrip();
     setTracking(isActive);
@@ -72,9 +81,12 @@ export default function AddTripScreen() {
       const fiveMinutes = 5 * 60 * 1000;
 
       if (!isActive && tripAge > fiveMinutes && !recoveryAlertShown) {
-        // Before showing recovery alert, check if this trip was already saved by auto-tracking
-        // This prevents duplicate saves when auto-tracking saves and user manually saves
+        // Lock to prevent concurrent recovery attempts
+        isProcessingRecovery.current = true;
+
         try {
+          // Before showing recovery alert, check if this trip was already saved by auto-tracking
+          // This prevents duplicate saves when auto-tracking saves and user manually saves
           const startDate = new Date(trip.start_time);
           startDate.setHours(0, 0, 0, 0); // Start of day
           const endDate = new Date(trip.start_time);
@@ -94,43 +106,54 @@ export default function AddTripScreen() {
             console.log('[Add] Trip already saved by auto-tracking - clearing active trip without prompting');
             await clearActiveTrip();
             setActiveTrip(null);
+            isProcessingRecovery.current = false;
             return;
           }
+
+          // Show recovery alert only once
+          setRecoveryAlertShown(true);
+
+          // Offer to recover the trip
+          Alert.alert(
+            'Unsaved Trip Found',
+            `Found a trip from ${new Date(trip.start_time).toLocaleString()} with ${trip.distance.toFixed(2)} miles. Do you want to save it?`,
+            [
+              {
+                text: 'Discard',
+                style: 'destructive',
+                onPress: async () => {
+                  await clearActiveTrip();
+                  setActiveTrip(null);
+                  setRecoveryAlertShown(false);
+                  isProcessingRecovery.current = false;
+                },
+              },
+              {
+                text: 'Save Trip',
+                onPress: async () => {
+                  await handleRecoverTrip(trip);
+                  setRecoveryAlertShown(false);
+                  isProcessingRecovery.current = false;
+                },
+              },
+            ],
+            {
+              onDismiss: () => {
+                // Reset lock if user dismisses alert without choosing
+                isProcessingRecovery.current = false;
+              }
+            }
+          );
         } catch (error) {
           console.error('[Add] Error checking for existing trip:', error);
+          isProcessingRecovery.current = false;
           // Continue to show recovery alert if check fails
         }
-
-        // Show recovery alert only once
-        setRecoveryAlertShown(true);
-
-        // Offer to recover the trip
-        Alert.alert(
-          'Unsaved Trip Found',
-          `Found a trip from ${new Date(trip.start_time).toLocaleString()} with ${trip.distance.toFixed(2)} miles. Do you want to save it?`,
-          [
-            {
-              text: 'Discard',
-              style: 'destructive',
-              onPress: async () => {
-                await clearActiveTrip();
-                setActiveTrip(null);
-                setRecoveryAlertShown(false);
-              },
-            },
-            {
-              text: 'Save Trip',
-              onPress: async () => {
-                await handleRecoverTrip(trip);
-                setRecoveryAlertShown(false);
-              },
-            },
-          ]
-        );
       }
     } else {
       // Reset recovery alert flag when no trip exists
       setRecoveryAlertShown(false);
+      isProcessingRecovery.current = false;
     }
   };
 
@@ -576,6 +599,7 @@ const styles = StyleSheet.create({
   },
   distanceValue: {
     fontSize: 32,
+    lineHeight: 40,
     fontWeight: 'bold',
     color: '#007AFF',
     backgroundColor: 'transparent',

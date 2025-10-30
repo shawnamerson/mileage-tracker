@@ -379,8 +379,8 @@ export default function OnboardingScreen() {
         </ScrollView>
 
         <View style={styles.footer}>
-          <TouchableOpacity style={styles.secondaryButton} onPress={handleBack}>
-            <ThemedText style={styles.secondaryButtonText}>Back</ThemedText>
+          <TouchableOpacity style={styles.secondaryButton} onPress={() => setStep('notifications')}>
+            <ThemedText style={styles.secondaryButtonText}>Skip</ThemedText>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.primaryButton}
@@ -659,6 +659,7 @@ const styles = StyleSheet.create({
   },
   completeIcon: {
     fontSize: 80,
+    lineHeight: 96,
     marginBottom: 24,
   },
   completeTitle: {
