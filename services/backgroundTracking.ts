@@ -2,6 +2,8 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { calculateDistance } from './locationService';
+import { saveActiveTripProgress } from './localDatabase';
+import { getCurrentUserId } from './authService';
 
 const LOCATION_TASK_NAME = 'background-location-task';
 const ACTIVE_TRIP_KEY = 'active_trip';
@@ -27,8 +29,8 @@ export interface ActiveTrip {
 // Define the background task
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   if (error) {
-    console.error('Background location task error:', error);
-    return;
+    console.error('[BackgroundTracking] ❌ Background location task error:', error);
+    // Don't return - try to continue if possible
   }
 
   if (data) {
@@ -66,12 +68,57 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
             timestamp: Date.now(),
           });
 
-          // Save updated trip
-          await AsyncStorage.setItem(ACTIVE_TRIP_KEY, JSON.stringify(activeTrip));
+          // Save to AsyncStorage (cache for quick reads)
+          try {
+            await AsyncStorage.setItem(ACTIVE_TRIP_KEY, JSON.stringify(activeTrip));
+          } catch (asyncError) {
+            console.error('[BackgroundTracking] ⚠️ AsyncStorage write failed (non-critical):', asyncError);
+            // Continue anyway - SQLite is the source of truth
+          }
+
+          // Save to SQLite with retry logic (crash-safe persistence)
+          const userId = await getCurrentUserId();
+          if (userId) {
+            let retries = 3;
+            let saved = false;
+
+            while (retries > 0 && !saved) {
+              try {
+                await saveActiveTripProgress(activeTrip.id, userId, {
+                  start_location: activeTrip.start_location,
+                  start_latitude: activeTrip.start_latitude,
+                  start_longitude: activeTrip.start_longitude,
+                  start_time: activeTrip.start_time,
+                  purpose: activeTrip.purpose,
+                  notes: activeTrip.notes || '',
+                  distance: activeTrip.distance,
+                  last_latitude: activeTrip.last_latitude,
+                  last_longitude: activeTrip.last_longitude,
+                });
+                saved = true;
+                console.log(`[BackgroundTracking] ✅ Trip progress saved to SQLite: ${activeTrip.distance.toFixed(2)} mi`);
+              } catch (sqliteError) {
+                retries--;
+                console.error(`[BackgroundTracking] ❌ SQLite save failed (${retries} retries left):`, sqliteError);
+
+                if (retries > 0) {
+                  // Wait briefly before retrying
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                } else {
+                  // All retries failed - log critical error
+                  console.error('[BackgroundTracking] 🔥 CRITICAL: All save attempts failed. Trip data may be at risk!');
+                  // Note: Data still in AsyncStorage, can be recovered on next app launch
+                }
+              }
+            }
+          } else {
+            console.error('[BackgroundTracking] ⚠️ No user ID found - cannot save to SQLite');
+          }
         }
       }
     } catch (err) {
-      console.error('Error processing location update:', err);
+      console.error('[BackgroundTracking] ❌ Error processing location update:', err);
+      // Log the error but don't crash - continue tracking
     }
   }
 });
@@ -116,8 +163,30 @@ export async function startBackgroundTracking(
       last_longitude: startLongitude,
     };
 
-    // Save active trip
+    // Save to AsyncStorage (cache)
     await AsyncStorage.setItem(ACTIVE_TRIP_KEY, JSON.stringify(activeTrip));
+
+    // Save initial trip to SQLite for crash safety
+    const userId = await getCurrentUserId();
+    if (userId) {
+      try {
+        await saveActiveTripProgress(activeTrip.id, userId, {
+          start_location: activeTrip.start_location,
+          start_latitude: activeTrip.start_latitude,
+          start_longitude: activeTrip.start_longitude,
+          start_time: activeTrip.start_time,
+          purpose: activeTrip.purpose,
+          notes: activeTrip.notes || '',
+          distance: 0,
+          last_latitude: activeTrip.last_latitude,
+          last_longitude: activeTrip.last_longitude,
+        });
+        console.log('[BackgroundTracking] ✅ Initial trip saved to SQLite');
+      } catch (sqliteError) {
+        console.error('[BackgroundTracking] ⚠️ Failed to save initial trip to SQLite:', sqliteError);
+        // Continue anyway - will retry on first location update
+      }
+    }
 
     // Start background location updates
     await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {

@@ -151,6 +151,66 @@ export async function saveLocalTrip(trip: Omit<LocalTrip, 'created_at' | 'update
 }
 
 /**
+ * Save or update active trip progress to SQLite (crash-safe)
+ * This ensures trip data survives app crashes during tracking
+ */
+export async function saveActiveTripProgress(
+  tripId: string,
+  userId: string,
+  data: {
+    start_location: string;
+    start_latitude: number;
+    start_longitude: number;
+    start_time: number;
+    purpose: 'business' | 'personal' | 'medical' | 'charity' | 'other';
+    notes: string;
+    distance: number;
+    last_latitude: number;
+    last_longitude: number;
+  }
+): Promise<void> {
+  if (!db) {
+    await initLocalDatabase();
+  }
+
+  try {
+    const now = Date.now();
+
+    // Use INSERT OR REPLACE to update existing trip or create new one
+    await db!.runAsync(
+      `INSERT OR REPLACE INTO trips (
+        id, user_id, start_location, end_location,
+        start_latitude, start_longitude, end_latitude, end_longitude,
+        distance, start_time, end_time, purpose, notes,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        tripId,
+        userId,
+        data.start_location,
+        'In Progress', // Placeholder - will be updated when trip completes
+        data.start_latitude,
+        data.start_longitude,
+        data.last_latitude,
+        data.last_longitude,
+        data.distance,
+        data.start_time,
+        now, // end_time - will be updated when trip completes
+        data.purpose,
+        data.notes,
+        data.start_time, // created_at
+        now, // updated_at
+      ]
+    );
+
+    console.log(`[LocalDB] ✅ Active trip progress saved: ${tripId} (${data.distance.toFixed(2)} mi)`);
+  } catch (error) {
+    console.error('[LocalDB] ❌ Error saving active trip progress:', error);
+    throw error;
+  }
+}
+
+/**
  * Delete trip from local database
  */
 export async function deleteLocalTrip(tripId: string): Promise<void> {

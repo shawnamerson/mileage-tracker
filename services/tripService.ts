@@ -458,9 +458,15 @@ export async function getBusinessDeductibleValue(): Promise<number> {
       yearTotals.set(year, (yearTotals.get(year) || 0) + trip.distance);
     });
 
+    // Batch load all needed rates (prevents N+1 query problem)
+    const years = Array.from(yearTotals.keys());
+    const ratesArray = await Promise.all(years.map(year => getRateForYear(year)));
+    const ratesByYear = new Map(years.map((year, i) => [year, ratesArray[i]]));
+
+    // Calculate total value using batch-loaded rates
     let totalValue = 0;
     for (const [year, distance] of yearTotals) {
-      const rate = await getRateForYear(year);
+      const rate = ratesByYear.get(year)!;
       totalValue += distance * rate;
     }
 
