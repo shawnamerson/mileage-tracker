@@ -180,7 +180,7 @@ export default function AddTripScreen() {
 
       try {
         const tripData = {
-          id: `trip_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: trip.id, // Use existing trip ID to prevent duplicates
           user_id: user.id,
           start_location: trip.start_location,
           end_location: endLocation,
@@ -192,11 +192,12 @@ export default function AddTripScreen() {
           start_time: trip.start_time,
           end_time: now,
           purpose: trip.purpose,
-          notes: trip.notes,
+          notes: trip.notes || '',
         };
 
-        // Save trip to Supabase (handles offline queue automatically)
-        await createTrip(tripData);
+        // Save directly to local database with existing ID (prevents duplicates)
+        const { saveLocalTrip } = await import('@/services/localDatabase');
+        await saveLocalTrip(tripData);
 
         // Clear trip data after successful save
         await clearActiveTrip();
@@ -315,7 +316,7 @@ export default function AddTripScreen() {
 
             try {
               const tripData = {
-                id: `trip_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                id: completedTrip.id, // Use existing trip ID to prevent duplicates
                 user_id: user.id,
                 start_location: completedTrip.start_location,
                 end_location: endLocation,
@@ -327,11 +328,12 @@ export default function AddTripScreen() {
                 start_time: completedTrip.start_time,
                 end_time: now,
                 purpose: completedTrip.purpose,
-                notes: completedTrip.notes,
+                notes: completedTrip.notes || '',
               };
 
-              // Save trip to Supabase (handles offline queue automatically)
-              await createTrip(tripData);
+              // Save directly to local database with existing ID (prevents duplicates)
+              const { saveLocalTrip } = await import('@/services/localDatabase');
+              await saveLocalTrip(tripData);
 
               // Clear trip data after successful save
               await clearActiveTrip();

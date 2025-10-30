@@ -3,7 +3,7 @@ import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { startBackgroundTracking, stopBackgroundTracking, clearActiveTrip, isTrackingActive } from './backgroundTracking';
 import { reverseGeocode, getCurrentLocation, calculateDistance } from './locationService';
-import { createTrip } from './tripService';
+import { getCurrentUserId } from './authService';
 import { sendTripCompletedNotification } from './notificationService';
 
 const AUTO_TRACKING_TASK = 'auto-tracking-monitor';
@@ -300,31 +300,58 @@ async function autoStopTrip() {
         endLon = location.longitude;
       }
 
-      // Save trip directly to database
+      // Update the existing in-progress trip (don't create a new one - prevents duplicates)
       const now = Date.now();
-      const tripData = {
-        start_location: completedTrip.start_location,
-        end_location: endLocation,
-        start_latitude: completedTrip.start_latitude,
-        start_longitude: completedTrip.start_longitude,
-        end_latitude: endLat,
-        end_longitude: endLon,
-        distance: completedTrip.distance,
-        start_time: completedTrip.start_time,
-        end_time: now,
-        purpose: completedTrip.purpose,
-        notes: completedTrip.notes,
-      };
 
-      console.log('[AutoTracking] Saving trip data:', {
-        distance: tripData.distance,
-        from: tripData.start_location,
-        to: tripData.end_location,
-        purpose: tripData.purpose,
+      console.log('[AutoTracking] Completing trip:', {
+        id: completedTrip.id,
+        distance: completedTrip.distance,
+        from: completedTrip.start_location,
+        to: endLocation,
+        purpose: completedTrip.purpose,
       });
 
       try {
-        const savedTrip = await createTrip(tripData);
+        // Get user ID for saving
+        const userId = await getCurrentUserId();
+
+        // Use saveLocalTrip with the SAME trip ID to update the existing trip
+        // This prevents creating a duplicate
+        const { saveLocalTrip } = await import('./localDatabase');
+        await saveLocalTrip({
+          id: completedTrip.id, // Use existing ID - prevents duplicate!
+          user_id: userId,
+          start_location: completedTrip.start_location,
+          end_location: endLocation,
+          start_latitude: completedTrip.start_latitude,
+          start_longitude: completedTrip.start_longitude,
+          end_latitude: endLat,
+          end_longitude: endLon,
+          distance: completedTrip.distance,
+          start_time: completedTrip.start_time,
+          end_time: now,
+          purpose: completedTrip.purpose,
+          notes: completedTrip.notes || '',
+        });
+
+        // Create a Trip object for notification
+        const savedTrip = {
+          id: completedTrip.id,
+          user_id: userId,
+          start_location: completedTrip.start_location,
+          end_location: endLocation,
+          start_latitude: completedTrip.start_latitude,
+          start_longitude: completedTrip.start_longitude,
+          end_latitude: endLat,
+          end_longitude: endLon,
+          distance: completedTrip.distance,
+          start_time: completedTrip.start_time,
+          end_time: now,
+          purpose: completedTrip.purpose,
+          notes: completedTrip.notes || '',
+          created_at: new Date(completedTrip.start_time).toISOString(),
+          updated_at: new Date(now).toISOString(),
+        };
 
         // Clear trip data after successful save
         await clearActiveTrip();
