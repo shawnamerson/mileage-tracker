@@ -31,7 +31,9 @@
       "Bash(xcrun devicectl device info logs:*)",
       "Bash(idevicesyslog:*)",
       "Bash(log stream --device-name \"Shawn''''s iPhone\" --predicate 'processImagePath CONTAINS \"\"\"\"MileMate\"\"\"\"' --style compact --timeout 15)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(tail:*)",
+      "Bash(npm install:*)"
     ],
     "deny": [],
     "ask": []

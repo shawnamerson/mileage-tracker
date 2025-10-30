@@ -14,7 +14,6 @@ import { initLocalDatabase } from '@/services/localDatabase';
 import { LoadingAnimation } from '@/components/LoadingAnimation';
 import { withTimeoutFallback, TIMEOUTS } from '@/utils/timeout';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { syncTrips } from '@/services/syncService';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -26,7 +25,6 @@ function RootNavigator() {
   const { user, loading } = useAuth();
   const [isReady, setIsReady] = useState(false);
   const appState = useRef(AppState.currentState);
-  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Initialize local database and IAP on app start
   useEffect(() => {
@@ -98,154 +96,81 @@ function RootNavigator() {
     }
   }, [user]);
 
-  // Periodic sync: resume sync and 5-minute interval
-  useEffect(() => {
-    if (!user) return;
-
-    // Helper to trigger sync
-    const triggerSync = async (reason: string) => {
-      try {
-        console.log(`[App] ${reason} - triggering sync...`);
-        await syncTrips();
-        console.log(`[App] ${reason} sync completed`);
-      } catch (error) {
-        console.error(`[App] Error during ${reason} sync:`, error);
-      }
-    };
-
-    // Start periodic sync (5 minutes)
-    const startPeriodicSync = () => {
-      // Clear any existing interval
-      if (syncIntervalRef.current) {
-        clearInterval(syncIntervalRef.current);
-      }
-
-      console.log('[App] Starting periodic sync (every 5 minutes)');
-      syncIntervalRef.current = setInterval(() => {
-        triggerSync('Periodic (5min)');
-      }, 5 * 60 * 1000); // 5 minutes
-    };
-
-    // Stop periodic sync
-    const stopPeriodicSync = () => {
-      if (syncIntervalRef.current) {
-        console.log('[App] Stopping periodic sync');
-        clearInterval(syncIntervalRef.current);
-        syncIntervalRef.current = null;
-      }
-    };
-
-    // Listen for app state changes
-    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
-      const previousState = appState.current;
-      appState.current = nextAppState;
-
-      console.log(`[App] App state changed: ${previousState} → ${nextAppState}`);
-
-      // App came to foreground
-      if (previousState.match(/inactive|background/) && nextAppState === 'active') {
-        triggerSync('App resume');
-        startPeriodicSync();
-      }
-
-      // App went to background
-      if (previousState === 'active' && nextAppState.match(/inactive|background/)) {
-        stopPeriodicSync();
-      }
-    });
-
-    // Start periodic sync if app is already active
-    if (AppState.currentState === 'active') {
-      startPeriodicSync();
-    }
-
-    // Cleanup
-    return () => {
-      subscription.remove();
-      stopPeriodicSync();
-    };
-  }, [user]);
+  // Note: Removed periodic sync - app is now 100% offline-first
+  // All data is stored locally in SQLite, no cloud sync needed
 
   useEffect(() => {
     async function handleNavigation() {
       console.log('[App] handleNavigation - loading:', loading, 'user:', !!user, 'segments:', segments);
 
-      // Wait for auth to finish loading
+      // Wait for user initialization to finish
       if (loading) {
-        console.log('[App] Waiting for auth to finish loading...');
+        console.log('[App] Waiting for user initialization...');
         return;
       }
 
-      console.log('[App] Auth loaded - showing UI immediately');
+      // User should always exist (auto-created by AuthContext)
+      if (!user) {
+        console.error('[App] No user after initialization - this should not happen');
+        return;
+      }
+
+      console.log('[App] User initialized - showing UI immediately');
 
       // Set ready immediately - don't block on slow checks
       setIsReady(true);
 
       try {
-        const inAuthGroup = segments[0] === 'auth';
         const inOnboarding = segments[0] === 'onboarding';
         const inTabs = segments[0] === '(tabs)';
         const inSubscription = segments[0] === 'subscription';
 
-        console.log('[App] Navigation context - inAuthGroup:', inAuthGroup, 'inOnboarding:', inOnboarding, 'inTabs:', inTabs, 'inSubscription:', inSubscription);
+        console.log('[App] Navigation context - inOnboarding:', inOnboarding, 'inTabs:', inTabs, 'inSubscription:', inSubscription);
 
-        // Not authenticated - redirect to sign-up for new users
-        if (!user && !inAuthGroup) {
-          console.log('[App] Not authenticated - redirecting to sign-up');
-          router.replace('/auth/sign-up');
+        // Navigate to dashboard if not already on a main screen
+        if (!inTabs && !inOnboarding && !inSubscription) {
+          console.log('[App] Not on main screen - redirecting to dashboard');
+          router.replace('/(tabs)');
+        }
+
+        // Check onboarding/paywall in BACKGROUND (non-blocking)
+        console.log('[App] Running background checks for onboarding/paywall...');
+
+        // Check onboarding with timeout protection
+        const completed = await withTimeoutFallback(
+          isOnboardingCompleted(),
+          TIMEOUTS.QUICK,
+          'Onboarding check',
+          true, // Assume completed on timeout
+          (error) => console.warn('[App] Onboarding check timed out, assuming completed')
+        );
+        console.log('[App] Onboarding completed:', completed);
+
+        if (!completed && !inOnboarding) {
+          // Not completed onboarding - redirect to onboarding
+          console.log('[App] Onboarding required - redirecting...');
+          router.replace('/onboarding');
           return;
         }
 
-        // Authenticated - navigate to dashboard immediately, check permissions in background
-        if (user) {
-          // First navigate to dashboard if not already there (optimistic)
-          if (inAuthGroup) {
-            console.log('[App] Authenticated user on auth screen - redirecting to dashboard');
-            router.replace('/(tabs)');
-          } else if (!inTabs && !inOnboarding && !inSubscription) {
-            console.log('[App] Authenticated user not on main screens - redirecting to dashboard');
-            router.replace('/(tabs)');
-          }
-
-          // Now check onboarding/paywall in BACKGROUND (non-blocking)
-          console.log('[App] Running background checks for onboarding/paywall...');
-
-          // Check onboarding with timeout protection
-          const completed = await withTimeoutFallback(
-            isOnboardingCompleted(),
+        // Check paywall only if onboarding is complete
+        if (completed) {
+          console.log('[App] Checking paywall status in background...');
+          const showPaywall = await withTimeoutFallback(
+            shouldShowPaywall(),
             TIMEOUTS.QUICK,
-            'Onboarding check',
-            true, // Assume completed on timeout
-            (error) => console.warn('[App] Onboarding check timed out, assuming completed')
+            'Paywall check',
+            false, // Assume no paywall on timeout
+            (error) => console.warn('[App] Paywall check timed out, assuming no paywall')
           );
-          console.log('[App] Onboarding completed:', completed);
+          console.log('[App] Paywall check result:', showPaywall);
 
-          if (!completed && !inOnboarding) {
-            // Not completed onboarding - redirect away from dashboard
-            console.log('[App] Onboarding required - redirecting...');
-            router.replace('/onboarding');
-            return;
-          }
-
-          // Check paywall only if onboarding is complete
-          if (completed) {
-            console.log('[App] Checking paywall status in background...');
-            const showPaywall = await withTimeoutFallback(
-              shouldShowPaywall(),
-              TIMEOUTS.QUICK,
-              'Paywall check',
-              false, // Assume no paywall on timeout
-              (error) => console.warn('[App] Paywall check timed out, assuming no paywall')
-            );
-            console.log('[App] Paywall check result:', showPaywall);
-
-            if (showPaywall && !inSubscription) {
-              // Trial expired - redirect to paywall
-              console.log('[App] Paywall required - redirecting...');
-              router.replace('/subscription/paywall');
-            } else {
-              console.log('[App] Background checks complete - user has full access');
-            }
+          if (showPaywall && !inSubscription) {
+            // Trial expired - redirect to paywall
+            console.log('[App] Paywall required - redirecting...');
+            router.replace('/subscription/paywall');
+          } else {
+            console.log('[App] Background checks complete - user has full access');
           }
         }
       } catch (error) {
@@ -254,7 +179,7 @@ function RootNavigator() {
     }
 
     handleNavigation();
-  }, [user, loading]); // Removed 'segments' - only run on auth state changes
+  }, [user, loading]); // Run on user/loading state changes
 
   // Only show loading screen while auth is loading (fast)
   if (loading) {
@@ -278,7 +203,7 @@ function RootNavigator() {
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <Stack>
         {/* Routes with their own _layout.tsx handle their own screens */}
-        <Stack.Screen name="auth" options={{ headerShown: false }} />
+        {/* Removed auth screens - app is now auth-free with auto-generated users */}
         <Stack.Screen name="onboarding" options={{ headerShown: false }} />
         <Stack.Screen name="subscription" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

@@ -16,7 +16,7 @@ import {
   LocalTrip,
 } from '@/services/localDatabase';
 import { getRateForYear } from '@/services/mileageRateService';
-import { onSyncComplete, onSyncStatusChange, isSyncing } from '@/services/syncService';
+// Removed sync service - app is now 100% offline
 import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
@@ -29,7 +29,7 @@ export default function DashboardScreen() {
   const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+  const [hasLoadedWithTrips, setHasLoadedWithTrips] = useState(false);
   const [todayStats, setTodayStats] = useState({
     totalTrips: 0,
     totalDistance: 0,
@@ -76,6 +76,11 @@ export default function DashboardScreen() {
         .sort((a, b) => b.start_time - a.start_time)
         .slice(0, 5);
       setRecentTrips(recent);
+
+      // Track if we've successfully loaded trips at least once
+      if (allTrips.length > 0) {
+        setHasLoadedWithTrips(true);
+      }
     } catch (error) {
       console.error('[Dashboard] Error loading data:', error);
       // Use default values on error
@@ -101,6 +106,7 @@ export default function DashboardScreen() {
     if (!authLoading && !user) {
       // Auth completed but no user - set loading to false
       setLoading(false);
+      setHasLoadedWithTrips(false); // Reset on sign out
     }
   }, [authLoading, user]);
 
@@ -113,33 +119,7 @@ export default function DashboardScreen() {
     }, [authLoading, user])
   );
 
-  // Track sync status and auto-reload when sync completes
-  useEffect(() => {
-    if (!user) return;
-
-    // Set initial syncing state
-    setSyncing(isSyncing());
-
-    console.log('[Dashboard] Subscribing to sync events');
-
-    // Subscribe to sync status changes
-    const unsubscribeStatus = onSyncStatusChange((isSyncingNow) => {
-      console.log('[Dashboard] Sync status changed:', isSyncingNow);
-      setSyncing(isSyncingNow);
-    });
-
-    // Subscribe to sync completion
-    const unsubscribeComplete = onSyncComplete(() => {
-      console.log('[Dashboard] Sync completed - reloading data...');
-      loadData();
-    });
-
-    return () => {
-      console.log('[Dashboard] Unsubscribing from sync events');
-      unsubscribeStatus();
-      unsubscribeComplete();
-    };
-  }, [user]);
+  // Removed sync tracking - app is now 100% offline
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -263,9 +243,9 @@ export default function DashboardScreen() {
 
         {recentTrips.length === 0 ? (
           <ThemedView style={styles.emptyState}>
-            {syncing ? (
+            {loading ? (
               <>
-                <LoadingAnimation text="Syncing your trips..." />
+                <LoadingAnimation text="Loading your trips..." />
               </>
             ) : (
               <ThemedText style={[styles.emptyStateText, { color: colors.textSecondary }]}>

@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCurrentUser } from './authService';
 
 export interface Vehicle {
@@ -17,6 +17,33 @@ export interface Vehicle {
   updated_at: string;
 }
 
+const VEHICLES_KEY = 'vehicles';
+
+/**
+ * Get all vehicles from local storage
+ */
+async function getLocalVehicles(): Promise<Vehicle[]> {
+  try {
+    const vehiclesJson = await AsyncStorage.getItem(VEHICLES_KEY);
+    if (!vehiclesJson) return [];
+    return JSON.parse(vehiclesJson);
+  } catch (error) {
+    console.error('[Vehicles] Error getting local vehicles:', error);
+    return [];
+  }
+}
+
+/**
+ * Save vehicles to local storage
+ */
+async function saveLocalVehicles(vehicles: Vehicle[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(VEHICLES_KEY, JSON.stringify(vehicles));
+  } catch (error) {
+    console.error('[Vehicles] Error saving local vehicles:', error);
+  }
+}
+
 /**
  * Get all vehicles for current user
  */
@@ -28,18 +55,8 @@ export async function getAllVehicles(): Promise<Vehicle[]> {
       return [];
     }
 
-    const { data, error } = await supabase
-      .from('vehicles')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error getting vehicles:', error);
-      return [];
-    }
-
-    return data || [];
+    const vehicles = await getLocalVehicles();
+    return vehicles.filter(v => v.user_id === user.id);
   } catch (error) {
     console.error('Error getting vehicles:', error);
     return [];
@@ -51,25 +68,8 @@ export async function getAllVehicles(): Promise<Vehicle[]> {
  */
 export async function getVehicle(id: string): Promise<Vehicle | null> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('No user logged in');
-      return null;
-    }
-
-    const { data, error } = await supabase
-      .from('vehicles')
-      .select('*')
-      .eq('id', id)
-      .eq('user_id', user.id)
-      .single();
-
-    if (error) {
-      console.error('Error getting vehicle:', error);
-      return null;
-    }
-
-    return data;
+    const vehicles = await getAllVehicles();
+    return vehicles.find(v => v.id === id) || null;
   } catch (error) {
     console.error('Error getting vehicle:', error);
     return null;
@@ -81,28 +81,13 @@ export async function getVehicle(id: string): Promise<Vehicle | null> {
  */
 export async function getActiveVehicle(): Promise<Vehicle | null> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('No user logged in');
-      return null;
-    }
+    const vehicles = await getAllVehicles();
+    const active = vehicles.find(v => v.is_active);
 
-    // Try to get the vehicle marked as active
-    const { data, error } = await supabase
-      .from('vehicles')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('is_active', true)
-      .single();
-
-    if (!error && data) {
-      return data;
-    }
+    if (active) return active;
 
     // If no active vehicle, return the first one
-    const vehicles = await getAllVehicles();
     if (vehicles.length > 0) {
-      // Set the first one as active
       await setActiveVehicle(vehicles[0].id);
       return vehicles[0];
     }
@@ -120,27 +105,18 @@ export async function getActiveVehicle(): Promise<Vehicle | null> {
 export async function setActiveVehicle(id: string): Promise<void> {
   try {
     const user = await getCurrentUser();
-    if (!user) {
-      throw new Error('No user logged in');
-    }
+    if (!user) throw new Error('No user logged in');
 
-    // First, set all vehicles to inactive
-    await supabase
-      .from('vehicles')
-      .update({ is_active: false })
-      .eq('user_id', user.id);
+    const vehicles = await getLocalVehicles();
 
-    // Then set the selected vehicle as active
-    const { error } = await supabase
-      .from('vehicles')
-      .update({ is_active: true })
-      .eq('id', id)
-      .eq('user_id', user.id);
+    // Set all user's vehicles to inactive
+    const updated = vehicles.map(v =>
+      v.user_id === user.id
+        ? { ...v, is_active: v.id === id }
+        : v
+    );
 
-    if (error) {
-      console.error('Error setting active vehicle:', error);
-      throw error;
-    }
+    await saveLocalVehicles(updated);
   } catch (error) {
     console.error('Error setting active vehicle:', error);
     throw error;
@@ -155,37 +131,32 @@ export async function createVehicle(
 ): Promise<Vehicle> {
   try {
     const user = await getCurrentUser();
-    if (!user) {
-      throw new Error('No user logged in');
-    }
+    if (!user) throw new Error('No user logged in');
 
-    // Check if this is the first vehicle
     const vehicles = await getAllVehicles();
     const isFirstVehicle = vehicles.length === 0;
 
-    const { data, error } = await supabase
-      .from('vehicles')
-      .insert({
-        user_id: user.id,
-        name: vehicle.name,
-        make: vehicle.make,
-        model: vehicle.model,
-        year: vehicle.year,
-        initial_mileage: vehicle.initial_mileage,
-        current_mileage: vehicle.initial_mileage,
-        bluetooth_device_id: vehicle.bluetooth_device_id,
-        bluetooth_device_name: vehicle.bluetooth_device_name,
-        is_active: isFirstVehicle, // First vehicle is automatically active
-      })
-      .select()
-      .single();
+    const newVehicle: Vehicle = {
+      id: `vehicle_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      user_id: user.id,
+      name: vehicle.name,
+      make: vehicle.make,
+      model: vehicle.model,
+      year: vehicle.year,
+      initial_mileage: vehicle.initial_mileage,
+      current_mileage: vehicle.initial_mileage,
+      bluetooth_device_id: vehicle.bluetooth_device_id,
+      bluetooth_device_name: vehicle.bluetooth_device_name,
+      is_active: isFirstVehicle,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
 
-    if (error) {
-      console.error('Error creating vehicle:', error);
-      throw error;
-    }
+    const allVehicles = await getLocalVehicles();
+    await saveLocalVehicles([...allVehicles, newVehicle]);
 
-    return data;
+    console.log('[Vehicles] ✅ Vehicle created:', newVehicle.id);
+    return newVehicle;
   } catch (error) {
     console.error('Error creating vehicle:', error);
     throw error;
@@ -201,24 +172,24 @@ export async function updateVehicle(
 ): Promise<Vehicle | null> {
   try {
     const user = await getCurrentUser();
-    if (!user) {
-      throw new Error('No user logged in');
+    if (!user) throw new Error('No user logged in');
+
+    const vehicles = await getLocalVehicles();
+    const index = vehicles.findIndex(v => v.id === id && v.user_id === user.id);
+
+    if (index === -1) {
+      throw new Error('Vehicle not found');
     }
 
-    const { data, error } = await supabase
-      .from('vehicles')
-      .update(updates)
-      .eq('id', id)
-      .eq('user_id', user.id)
-      .select()
-      .single();
+    vehicles[index] = {
+      ...vehicles[index],
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
 
-    if (error) {
-      console.error('Error updating vehicle:', error);
-      throw error;
-    }
-
-    return data;
+    await saveLocalVehicles(vehicles);
+    console.log('[Vehicles] ✅ Vehicle updated:', id);
+    return vehicles[index];
   } catch (error) {
     console.error('Error updating vehicle:', error);
     throw error;
@@ -231,24 +202,15 @@ export async function updateVehicle(
 export async function deleteVehicle(id: string): Promise<void> {
   try {
     const user = await getCurrentUser();
-    if (!user) {
-      throw new Error('No user logged in');
-    }
+    if (!user) throw new Error('No user logged in');
 
-    // Check if this was the active vehicle
     const vehicle = await getVehicle(id);
     const wasActive = vehicle?.is_active;
 
-    const { error } = await supabase
-      .from('vehicles')
-      .delete()
-      .eq('id', id)
-      .eq('user_id', user.id);
+    const vehicles = await getLocalVehicles();
+    const filtered = vehicles.filter(v => !(v.id === id && v.user_id === user.id));
 
-    if (error) {
-      console.error('Error deleting vehicle:', error);
-      throw error;
-    }
+    await saveLocalVehicles(filtered);
 
     // If we deleted the active vehicle, set a new active vehicle
     if (wasActive) {
@@ -257,6 +219,8 @@ export async function deleteVehicle(id: string): Promise<void> {
         await setActiveVehicle(remaining[0].id);
       }
     }
+
+    console.log('[Vehicles] ✅ Vehicle deleted:', id);
   } catch (error) {
     console.error('Error deleting vehicle:', error);
     throw error;
@@ -265,47 +229,18 @@ export async function deleteVehicle(id: string): Promise<void> {
 
 /**
  * Update vehicle mileage after a trip
- * Uses atomic PostgreSQL function to prevent race conditions
  */
 export async function updateVehicleMileage(
   vehicleId: string,
   additionalMiles: number
 ): Promise<Vehicle | null> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      throw new Error('No user logged in');
-    }
+    const vehicle = await getVehicle(vehicleId);
+    if (!vehicle) return null;
 
-    // Use the atomic PostgreSQL function to increment mileage
-    // This prevents race conditions when multiple trips complete simultaneously
-    const { data, error } = await supabase
-      .rpc('increment_vehicle_mileage', {
-        vehicle_id_param: vehicleId,
-        miles_to_add: additionalMiles,
-      })
-      .single();
-
-    if (error) {
-      console.error('Error updating vehicle mileage:', error);
-      throw error;
-    }
-
-    if (!data) {
-      console.error('No data returned from mileage update');
-      return null;
-    }
-
-    // Cast the return type since RPC doesn't infer it automatically
-    const vehicle = data as Vehicle;
-
-    // Verify the vehicle belongs to the current user
-    if (vehicle.user_id !== user.id) {
-      console.error('Vehicle does not belong to current user');
-      return null;
-    }
-
-    return vehicle;
+    return await updateVehicle(vehicleId, {
+      current_mileage: vehicle.current_mileage + additionalMiles,
+    });
   } catch (error) {
     console.error('Error updating vehicle mileage:', error);
     throw error;
@@ -319,25 +254,8 @@ export async function getVehicleByBluetoothDevice(
   bluetoothDeviceId: string
 ): Promise<Vehicle | null> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('No user logged in');
-      return null;
-    }
-
-    const { data, error } = await supabase
-      .from('vehicles')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('bluetooth_device_id', bluetoothDeviceId)
-      .single();
-
-    if (error) {
-      console.error('Error getting vehicle by Bluetooth device:', error);
-      return null;
-    }
-
-    return data;
+    const vehicles = await getAllVehicles();
+    return vehicles.find(v => v.bluetooth_device_id === bluetoothDeviceId) || null;
   } catch (error) {
     console.error('Error getting vehicle by Bluetooth device:', error);
     return null;

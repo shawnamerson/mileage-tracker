@@ -1,5 +1,4 @@
-import { supabase } from './supabase';
-import { getCurrentUser } from './authService';
+import { getCurrentUser, getUserProfile, activateSubscription as activateLocalSubscription } from './authService';
 
 // Type definitions for react-native-iap
 export interface Product {
@@ -126,18 +125,15 @@ function setupPurchaseListeners() {
     const receipt = purchase.transactionId;
     if (receipt) {
       try {
-        // Verify the purchase with Apple via Supabase Edge Function
-        // This will throw an error if verification fails
-        await updateSupabaseSubscription(purchase);
+        // Update local subscription status
+        await updateLocalSubscription(purchase);
 
-        // Only finish the transaction if verification succeeded
+        // Finish the transaction
         await RNIap.finishTransaction({ purchase, isConsumable: false });
-        console.log('[Apple IAP] ✅ Transaction verified and finished');
+        console.log('[Apple IAP] ✅ Transaction finished and subscription activated');
       } catch (error) {
         console.error('[Apple IAP] ❌ Error handling purchase update:', error);
-        // DO NOT finish the transaction if verification failed
-        // This allows the user to retry or contact support
-        console.error('[Apple IAP] Transaction NOT finished - verification failed');
+        console.error('[Apple IAP] Transaction NOT finished - activation failed');
       }
     }
   });
@@ -318,13 +314,13 @@ export async function restorePurchases(): Promise<{
 
     console.log('[Apple IAP] Found purchases to restore:', purchases.length);
 
-    // Update Supabase with restored purchases
+    // Update local profile with restored purchases
     const subscriptionPurchase = purchases.find((purchase: Purchase) =>
       PRODUCT_IDS_LIST.includes(purchase.productId)
     );
 
     if (subscriptionPurchase) {
-      await updateSupabaseSubscription(subscriptionPurchase);
+      await updateLocalSubscription(subscriptionPurchase);
     }
 
     // Clear paywall cache so UI updates immediately
@@ -339,70 +335,10 @@ export async function restorePurchases(): Promise<{
 }
 
 /**
- * Verify Apple IAP receipt with Supabase Edge Function
+ * Update local subscription status from Apple IAP purchase
+ * (Offline-first version - no server verification)
  */
-async function verifyAppleReceipt(purchase: Purchase): Promise<{
-  verified: boolean;
-  error?: string;
-}> {
-  try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('[Apple IAP] No user logged in');
-      return { verified: false, error: 'No user logged in' };
-    }
-
-    // Get the session token
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      console.error('[Apple IAP] No active session');
-      return { verified: false, error: 'No active session' };
-    }
-
-    // Get receipt data - for iOS, transactionReceipt contains the base64 receipt
-    const receiptData = purchase.transactionReceipt;
-    if (!receiptData) {
-      console.error('[Apple IAP] No receipt data in purchase');
-      return { verified: false, error: 'No receipt data' };
-    }
-
-    console.log('[Apple IAP] Verifying receipt with server...');
-
-    // Call Supabase Edge Function to verify receipt
-    const { data, error } = await supabase.functions.invoke('verify-apple-receipt', {
-      body: {
-        receiptData,
-        transactionId: purchase.transactionId,
-        productId: purchase.productId,
-      },
-    });
-
-    if (error) {
-      console.error('[Apple IAP] Error calling verification function:', error);
-      return { verified: false, error: error.message };
-    }
-
-    if (!data.verified) {
-      console.error('[Apple IAP] Receipt verification failed:', data.error);
-      return { verified: false, error: data.error };
-    }
-
-    console.log('[Apple IAP] ✅ Receipt verified successfully:', data.subscriptionStatus);
-    return { verified: true };
-  } catch (error) {
-    console.error('[Apple IAP] Unexpected error verifying receipt:', error);
-    return {
-      verified: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-  }
-}
-
-/**
- * Update Supabase profile with subscription status from Apple
- * Now includes proper receipt verification
- */
-async function updateSupabaseSubscription(purchase: Purchase): Promise<void> {
+async function updateLocalSubscription(purchase: Purchase): Promise<void> {
   try {
     const user = await getCurrentUser();
     if (!user) {
@@ -418,25 +354,32 @@ async function updateSupabaseSubscription(purchase: Purchase): Promise<void> {
       return;
     }
 
-    // IMPORTANT: Verify the receipt with Apple before granting access
-    console.log('[Apple IAP] Starting receipt verification...');
-    const { verified, error } = await verifyAppleReceipt(purchase);
+    console.log('[Apple IAP] Activating subscription for product:', purchase.productId);
 
-    if (!verified) {
-      console.error('[Apple IAP] ❌ Receipt verification failed:', error);
-      console.error('[Apple IAP] NOT updating subscription status - purchase may be fraudulent');
+    // Calculate expiration date based on product type
+    let expiresAt: string | null = null;
 
-      // Alert the user that verification failed
-      throw new Error(`Receipt verification failed: ${error}`);
+    if (purchase.productId === PRODUCT_IDS.monthly) {
+      // Monthly subscription - expires in 30 days
+      const expires = new Date();
+      expires.setDate(expires.getDate() + 30);
+      expiresAt = expires.toISOString();
+    } else if (purchase.productId === PRODUCT_IDS.annual) {
+      // Annual subscription - expires in 365 days
+      const expires = new Date();
+      expires.setDate(expires.getDate() + 365);
+      expiresAt = expires.toISOString();
     }
 
-    console.log('[Apple IAP] ✅ Receipt verified - subscription updated by Edge Function');
-    // Note: The Edge Function already updated the profile, so we're done here
+    // Update local profile
+    await activateLocalSubscription(user.id, expiresAt);
+
+    console.log('[Apple IAP] ✅ Local subscription activated');
 
     // Clear paywall cache so UI updates immediately
     clearPaywallCache();
   } catch (error) {
-    console.error('[Apple IAP] Error in updateSupabaseSubscription:', error);
+    console.error('[Apple IAP] Error in updateLocalSubscription:', error);
     throw error; // Re-throw to be handled by caller
   }
 }
@@ -460,7 +403,7 @@ export async function shouldShowPaywall(): Promise<boolean> {
       return paywallCache.result;
     }
 
-    // Check Supabase profile first (faster than IAP check)
+    // Check local profile first (fast)
     const user = await getCurrentUser();
     if (!user) {
       console.log('[Apple IAP] No user, show paywall');
@@ -469,12 +412,7 @@ export async function shouldShowPaywall(): Promise<boolean> {
       return result;
     }
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('subscription_status, subscription_expires_at')
-      .eq('id', user.id)
-      .single();
-
+    const profile = await getUserProfile(user.id);
     if (!profile) {
       console.log('[Apple IAP] No profile, show paywall');
       const result = true;
@@ -482,7 +420,7 @@ export async function shouldShowPaywall(): Promise<boolean> {
       return result;
     }
 
-    // If has active or trial subscription in Supabase (synced from Apple)
+    // If has active or trial subscription in local profile
     if (profile.subscription_status === 'active' || profile.subscription_status === 'trial') {
       // Double-check expiration date if available
       if (profile.subscription_expires_at) {
@@ -496,15 +434,15 @@ export async function shouldShowPaywall(): Promise<boolean> {
           console.log('[Apple IAP] Subscription expired, checking Apple IAP...');
         }
       } else {
-        console.log('[Apple IAP] Subscription active in DB, no paywall');
+        console.log('[Apple IAP] Subscription active in profile, no paywall');
         const result = false;
         paywallCache = { result, timestamp: Date.now() };
         return result;
       }
     }
 
-    // If Supabase says no subscription, double-check with Apple IAP
-    // This handles cases where the user restored purchases but Supabase isn't updated yet
+    // If local profile says no subscription, double-check with Apple IAP
+    // This handles cases where the user restored purchases but profile isn't updated yet
     if (RNIap) {
       console.log('[Apple IAP] Checking Apple for active subscription...');
       const hasActiveAppleSubscription = await hasActiveSubscription();
@@ -536,7 +474,7 @@ export function clearPaywallCache(): void {
 }
 
 /**
- * Get subscription expiration date from Supabase
+ * Get subscription expiration date from local profile
  * Note: For production, you should verify with Apple's servers
  */
 export async function getSubscriptionExpirationDate(): Promise<Date | null> {
@@ -546,12 +484,7 @@ export async function getSubscriptionExpirationDate(): Promise<Date | null> {
       return null;
     }
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('subscription_expires_at')
-      .eq('id', user.id)
-      .single();
-
+    const profile = await getUserProfile(user.id);
     if (!profile || !profile.subscription_expires_at) {
       return null;
     }

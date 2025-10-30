@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.trackmymileage.app",
-      "buildNumber": "28",
+      "buildNumber": "33",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to your location to track mileage and record trip locations.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs continuous access to your location to automatically track trips in the background.",
@@ -24,7 +24,10 @@
       "config": {
         "usesNonExemptEncryption": false
       },
-      "usesAppleSignIn": true
+      "usesAppleSignIn": true,
+      "entitlements": {
+        "_comment": "To enable iCloud backup, add the following in Xcode: 1) Enable iCloud capability, 2) Add iCloud container (e.g., iCloud.com.trackmymileage.app), 3) Configure Info.plist with AsyncStorage iCloud sync settings. See: https://react-native-async-storage.github.io/async-storage/docs/advanced/icloud"
+      }
     },
     "android": {
       "package": "com.mileagetracker.app",

@@ -1,259 +1,196 @@
-import { supabase, Profile } from './supabase';
-import { Session, User, AuthError } from '@supabase/supabase-js';
-import * as AppleAuthentication from 'expo-apple-authentication';
-import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import 'react-native-get-random-values';
+import { v4 as uuidv4 } from 'uuid';
 
-export interface AuthResult {
-  user: User | null;
-  session: Session | null;
-  error: AuthError | null;
+// Local user types (offline-first, no authentication required)
+export interface LocalUser {
+  id: string;
+  email: string;
+  created_at: string;
 }
 
-/**
- * Check if Apple Authentication is available on this device
- */
-export async function isAppleAuthAvailable(): Promise<boolean> {
-  if (Platform.OS !== 'ios') {
-    return false;
-  }
-  try {
-    return await AppleAuthentication.isAvailableAsync();
-  } catch (error) {
-    console.error('Error checking Apple Auth availability:', error);
-    return false;
-  }
+export interface LocalProfile {
+  id: string;
+  email: string;
+  trial_started_at: string;
+  trial_ends_at: string;
+  subscription_status: 'trial' | 'active' | 'inactive' | 'expired';
+  subscription_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
+// AsyncStorage keys
+const USER_KEY = 'user';
+const USER_ID_KEY = 'user_id';
+const USER_EMAIL_KEY = 'user_email';
+const PROFILE_KEY = 'profile';
+
 /**
- * Sign in with Apple
+ * Initialize user on first app launch
+ * Automatically creates an anonymous user with unique device ID
  */
-export async function signInWithApple(): Promise<AuthResult> {
+export async function initializeUser(): Promise<LocalUser> {
   try {
-    const credential = await AppleAuthentication.signInAsync({
-      requestedScopes: [
-        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
-        AppleAuthentication.AppleAuthenticationScope.EMAIL,
-      ],
-    });
+    // Check if user already exists
+    let user = await getCurrentUser();
 
-    // Sign in to Supabase with Apple ID token
-    const { data, error } = await supabase.auth.signInWithIdToken({
-      provider: 'apple',
-      token: credential.identityToken!,
-    });
-
-    if (error) {
-      console.error('Apple sign in error:', error);
-      return { user: null, session: null, error };
+    if (user) {
+      console.log('[Auth] User already exists:', user.email);
+      return user;
     }
 
-    console.log('User signed in with Apple successfully:', data.user?.email);
-    return { user: data.user, session: data.session, error: null };
-  } catch (error: any) {
-    console.error('Unexpected Apple sign in error:', error);
+    // Create new anonymous user
+    console.log('[Auth] Creating new anonymous user...');
+    const userId = uuidv4();
+    const email = `user_${userId.split('-')[0]}@local`;
 
-    // User cancelled the sign-in
-    if (error.code === 'ERR_REQUEST_CANCELED') {
-      return {
-        user: null,
-        session: null,
-        error: { message: 'Sign in cancelled', name: 'AuthError', status: 400 } as AuthError,
-      };
-    }
-
-    return {
-      user: null,
-      session: null,
-      error: error as AuthError,
-    };
-  }
-}
-
-/**
- * Sign up a new user with email and password
- */
-export async function signUp(email: string, password: string): Promise<AuthResult> {
-  try {
-    const { data, error } = await supabase.auth.signUp({
+    user = {
+      id: userId,
       email,
-      password,
-    });
-
-    if (error) {
-      console.error('Sign up error:', error);
-      return { user: null, session: null, error };
-    }
-
-    console.log('User signed up successfully:', data.user?.email);
-    return { user: data.user, session: data.session, error: null };
-  } catch (error) {
-    console.error('Unexpected sign up error:', error);
-    return {
-      user: null,
-      session: null,
-      error: error as AuthError,
+      created_at: new Date().toISOString(),
     };
+
+    // Store user data locally
+    await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
+    await AsyncStorage.setItem(USER_ID_KEY, userId);
+    await AsyncStorage.setItem(USER_EMAIL_KEY, email);
+
+    // Create profile with 7-day trial
+    await createLocalProfile(user);
+
+    console.log('[Auth] ✅ Anonymous user created:', email);
+    return user;
+  } catch (error) {
+    console.error('[Auth] Error initializing user:', error);
+    throw error;
   }
 }
 
 /**
- * Sign in an existing user with email and password
+ * Create a new local profile for a user
  */
-export async function signIn(email: string, password: string): Promise<AuthResult> {
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+async function createLocalProfile(user: LocalUser): Promise<LocalProfile> {
+  const now = new Date();
+  const trialEnds = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days from now
 
-    if (error) {
-      console.error('Sign in error:', error);
-      return { user: null, session: null, error };
+  const profile: LocalProfile = {
+    id: user.id,
+    email: user.email,
+    trial_started_at: now.toISOString(),
+    trial_ends_at: trialEnds.toISOString(),
+    subscription_status: 'trial',
+    subscription_expires_at: null,
+    created_at: now.toISOString(),
+    updated_at: now.toISOString(),
+  };
+
+  await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  console.log('[Auth] ✅ Profile created with 7-day trial');
+
+  return profile;
+}
+
+/**
+ * Get local profile from AsyncStorage
+ */
+async function getLocalProfile(userId: string): Promise<LocalProfile | null> {
+  try {
+    const profileJson = await AsyncStorage.getItem(PROFILE_KEY);
+    if (!profileJson) {
+      return null;
     }
 
-    console.log('User signed in successfully:', data.user?.email);
-    return { user: data.user, session: data.session, error: null };
+    const profile: LocalProfile = JSON.parse(profileJson);
+
+    // Verify it belongs to this user
+    if (profile.id !== userId) {
+      console.warn('[Auth] Profile belongs to different user, clearing...');
+      await AsyncStorage.removeItem(PROFILE_KEY);
+      return null;
+    }
+
+    return profile;
   } catch (error) {
-    console.error('Unexpected sign in error:', error);
-    return {
-      user: null,
-      session: null,
-      error: error as AuthError,
-    };
+    console.error('[Auth] Error getting local profile:', error);
+    return null;
   }
 }
 
 /**
- * Sign out the current user
+ * Reset app data (clear all user data and start fresh)
  */
-export async function signOut(): Promise<{ error: AuthError | null }> {
+export async function resetAppData(): Promise<{ error: Error | null }> {
   try {
-    // Clear user cache
-    clearUserCache();
+    console.log('[Auth] Resetting app data...');
 
-    const { error } = await supabase.auth.signOut();
+    // Clear all auth data
+    await AsyncStorage.multiRemove([
+      USER_KEY,
+      USER_ID_KEY,
+      USER_EMAIL_KEY,
+      PROFILE_KEY,
+    ]);
 
-    if (error) {
-      console.error('Sign out error:', error);
-      return { error };
-    }
-
-    console.log('User signed out successfully');
+    console.log('[Auth] ✅ App data reset successfully');
     return { error: null };
   } catch (error) {
-    console.error('Unexpected sign out error:', error);
-    return { error: error as AuthError };
+    console.error('[Auth] Reset error:', error);
+    return { error: error instanceof Error ? error : new Error('Reset failed') };
   }
 }
 
 /**
- * Get the current user session
+ * Get the current user from local storage
  */
-export async function getSession(): Promise<Session | null> {
+export async function getCurrentUser(): Promise<LocalUser | null> {
   try {
-    const { data } = await supabase.auth.getSession();
-    return data.session;
-  } catch (error) {
-    console.error('Error getting session:', error);
-    return null;
-  }
-}
-
-// Cache to prevent concurrent getSession calls from causing deadlock
-let cachedUser: User | null = null;
-let cachedUserTimestamp: number = 0;
-const CACHE_DURATION = 5000; // 5 seconds cache
-
-// Mutex to prevent concurrent getSession calls
-let pendingUserFetch: Promise<User | null> | null = null;
-
-/**
- * Get the current user
- * Uses in-memory cache and mutex to avoid concurrent Supabase calls that cause deadlock
- */
-export async function getCurrentUser(): Promise<User | null> {
-  try {
-    // Return cached user if still valid
-    const now = Date.now();
-    if (cachedUser && (now - cachedUserTimestamp) < CACHE_DURATION) {
-      console.log('[Auth] getCurrentUser: Returning cached user:', cachedUser.id);
-      return cachedUser;
+    const userJson = await AsyncStorage.getItem(USER_KEY);
+    if (!userJson) {
+      return null;
     }
 
-    // If a fetch is already in progress, wait for it instead of starting a new one
-    if (pendingUserFetch) {
-      console.log('[Auth] getCurrentUser: Waiting for pending fetch...');
-      return await pendingUserFetch;
-    }
-
-    // Start a new fetch and store the promise
-    console.log('[Auth] getCurrentUser: Starting new fetch...');
-    pendingUserFetch = (async () => {
-      try {
-        console.log('[Auth] getCurrentUser: Fetching session...');
-        // First try to get from cached session (fast, no network call)
-        const { data: sessionData } = await supabase.auth.getSession();
-        console.log('[Auth] getCurrentUser: Session fetched, has user?', !!sessionData.session?.user);
-
-        if (sessionData.session?.user) {
-          console.log('[Auth] getCurrentUser: Caching user:', sessionData.session.user.id);
-          cachedUser = sessionData.session.user;
-          cachedUserTimestamp = Date.now();
-          return sessionData.session.user;
-        }
-
-        // Fallback to getUser if no session (makes network call)
-        console.log('[Auth] No cached session, fetching user from server...');
-        const { data } = await supabase.auth.getUser();
-        console.log('[Auth] getCurrentUser: User fetched from server:', data.user?.id);
-
-        if (data.user) {
-          cachedUser = data.user;
-          cachedUserTimestamp = Date.now();
-        }
-
-        return data.user;
-      } finally {
-        // Clear the pending fetch so new calls can proceed
-        pendingUserFetch = null;
-      }
-    })();
-
-    return await pendingUserFetch;
+    const user: LocalUser = JSON.parse(userJson);
+    return user;
   } catch (error) {
     console.error('[Auth] Error getting current user:', error);
-    pendingUserFetch = null; // Clear on error
     return null;
   }
-}
-
-/**
- * Clear the cached user (call on sign out)
- */
-export function clearUserCache(): void {
-  cachedUser = null;
-  cachedUserTimestamp = 0;
 }
 
 /**
  * Get the current user's profile
  */
-export async function getUserProfile(userId: string): Promise<Profile | null> {
-  try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
+export async function getUserProfile(userId: string): Promise<LocalProfile | null> {
+  return await getLocalProfile(userId);
+}
 
-    if (error) {
-      console.error('Error fetching profile:', error);
+/**
+ * Update user profile (for subscription changes)
+ */
+export async function updateUserProfile(
+  userId: string,
+  updates: Partial<Omit<LocalProfile, 'id' | 'email' | 'created_at'>>
+): Promise<LocalProfile | null> {
+  try {
+    const profile = await getLocalProfile(userId);
+    if (!profile) {
+      console.error('[Auth] Cannot update profile - profile not found');
       return null;
     }
 
-    return data;
+    const updatedProfile: LocalProfile = {
+      ...profile,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+
+    await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(updatedProfile));
+    console.log('[Auth] ✅ Profile updated');
+
+    return updatedProfile;
   } catch (error) {
-    console.error('Unexpected error fetching profile:', error);
+    console.error('[Auth] Error updating profile:', error);
     return null;
   }
 }
@@ -261,7 +198,7 @@ export async function getUserProfile(userId: string): Promise<Profile | null> {
 /**
  * Check if user's trial has expired
  */
-export function isTrialExpired(profile: Profile): boolean {
+export function isTrialExpired(profile: LocalProfile): boolean {
   const now = new Date();
   const trialEnds = new Date(profile.trial_ends_at);
   return now > trialEnds;
@@ -270,7 +207,7 @@ export function isTrialExpired(profile: Profile): boolean {
 /**
  * Check if user has active subscription (trial or paid)
  */
-export function hasActiveSubscription(profile: Profile): boolean {
+export function hasActiveSubscription(profile: LocalProfile): boolean {
   // If in trial and not expired
   if (profile.subscription_status === 'trial') {
     return !isTrialExpired(profile);
@@ -292,7 +229,7 @@ export function hasActiveSubscription(profile: Profile): boolean {
 /**
  * Get days remaining in trial
  */
-export function getTrialDaysRemaining(profile: Profile): number {
+export function getTrialDaysRemaining(profile: LocalProfile): number {
   const now = new Date();
   const trialEnds = new Date(profile.trial_ends_at);
   const diffTime = trialEnds.getTime() - now.getTime();
@@ -301,21 +238,57 @@ export function getTrialDaysRemaining(profile: Profile): number {
 }
 
 /**
- * Send password reset email
+ * Activate subscription (called after successful Apple IAP purchase)
  */
-export async function resetPassword(email: string): Promise<{ error: AuthError | null }> {
+export async function activateSubscription(
+  userId: string,
+  expiresAt: string | null = null
+): Promise<boolean> {
   try {
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    const updatedProfile = await updateUserProfile(userId, {
+      subscription_status: 'active',
+      subscription_expires_at: expiresAt,
+    });
 
-    if (error) {
-      console.error('Password reset error:', error);
-      return { error };
-    }
-
-    console.log('Password reset email sent to:', email);
-    return { error: null };
+    return !!updatedProfile;
   } catch (error) {
-    console.error('Unexpected password reset error:', error);
-    return { error: error as AuthError };
+    console.error('[Auth] Error activating subscription:', error);
+    return false;
   }
 }
+
+/**
+ * Deactivate subscription (for testing or cancellation)
+ */
+export async function deactivateSubscription(userId: string): Promise<boolean> {
+  try {
+    const updatedProfile = await updateUserProfile(userId, {
+      subscription_status: 'expired',
+      subscription_expires_at: new Date().toISOString(),
+    });
+
+    return !!updatedProfile;
+  } catch (error) {
+    console.error('[Auth] Error deactivating subscription:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if user is initialized
+ */
+export async function isUserInitialized(): Promise<boolean> {
+  const user = await getCurrentUser();
+  return !!user;
+}
+
+/**
+ * Get current user ID (helper function)
+ */
+export async function getCurrentUserId(): Promise<string | null> {
+  const user = await getCurrentUser();
+  return user?.id || null;
+}
+
+// Re-export Profile type for backward compatibility
+export type Profile = LocalProfile;

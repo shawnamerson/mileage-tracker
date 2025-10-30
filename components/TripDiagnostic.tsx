@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { getActiveTrip, isTrackingActive } from '@/services/backgroundTracking';
-import { getQueueStatus, processQueue } from '@/services/syncService';
+// Removed sync service - app is now 100% offline
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export function TripDiagnostic() {
@@ -27,8 +27,8 @@ export function TripDiagnostic() {
     setIsTracking(tracking);
     console.log('Tracking Active:', tracking);
 
-    // Check queue
-    const queue = await getQueueStatus();
+    // Queue removed - app is now 100% offline
+    const queue = { total: 0, pending: 0, failed: 0 };
     setQueueStatus(queue);
     console.log('Queue Status:', queue);
 
@@ -56,9 +56,7 @@ export function TripDiagnostic() {
   }, []);
 
   const handleProcessQueue = async () => {
-    console.log('Manually processing queue...');
-    const result = await processQueue();
-    console.log('Queue processed:', result);
+    console.log('Queue removed - app is now 100% offline');
     await runDiagnostic();
   };
 

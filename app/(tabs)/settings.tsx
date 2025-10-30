@@ -7,12 +7,24 @@ import {
   Alert,
   Modal,
   View,
+  Platform,
 } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { LoadingAnimation, LoadingSpinner } from '@/components/LoadingAnimation';
 import { TripDiagnostic } from '@/components/TripDiagnostic';
 import { Colors, useColors, Spacing, BorderRadius, Shadows, Typography } from '@/constants/Design';
+import {
+  getMigrationStatus,
+  exportSupabaseData,
+  importBackupToLocal,
+  performFullMigration,
+  getBackupFileSize,
+  deleteBackupFile,
+  type MigrationStatus,
+} from '@/services/migrationService';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   startAutoTracking,
   stopAutoTracking,
@@ -38,12 +50,21 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@/contexts/AuthContext';
 import { getTrialDaysRemaining } from '@/services/authService';
 import { restorePurchases } from '@/services/subscriptionService';
-import { getSyncStatus, syncTrips, type SyncStatus } from '@/services/syncService';
+// Removed sync service - app is now 100% offline
 import { getLocalTrips } from '@/services/localDatabase';
+import {
+  isICloudBackupEnabled,
+  enableICloudBackup,
+  disableICloudBackup,
+  backupToICloud,
+  restoreFromICloud,
+  getICloudStatus,
+  type ICloudStatus,
+} from '@/services/iCloudBackup';
 
 export default function SettingsScreen() {
   const colors = useColors();
-  const { user, profile, signOut, refreshProfile } = useAuth();
+  const { user, profile, resetApp, refreshProfile } = useAuth();
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [autoTrackingEnabled, setAutoTrackingEnabled] = useState(false);
@@ -61,8 +82,11 @@ export default function SettingsScreen() {
     activeTrip: null as any,
     isTracking: false,
   });
-  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
-  const [manualSyncing, setManualSyncing] = useState(false);
+  const [migrationStatus, setMigrationStatus] = useState<MigrationStatus | null>(null);
+  const [migrationLoading, setMigrationLoading] = useState(false);
+  const [backupFileSize, setBackupFileSize] = useState<string | null>(null);
+  const [iCloudStatus, setICloudStatus] = useState<ICloudStatus | null>(null);
+  const [iCloudLoading, setICloudLoading] = useState(false);
 
   const purposes = ['business', 'personal', 'medical', 'charity', 'other'] as const;
 
@@ -93,6 +117,12 @@ export default function SettingsScreen() {
       // Load diagnostic info
       await loadDiagnosticInfo();
 
+      // Load migration status
+      await loadMigrationStatus();
+
+      // Load iCloud status
+      await loadICloudStatus();
+
       console.log('[Settings] Settings loaded successfully');
     } catch (error) {
       console.error('[Settings] Error loading settings:', error);
@@ -103,6 +133,26 @@ export default function SettingsScreen() {
       setNotificationsEnabledState(false);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMigrationStatus = async () => {
+    try {
+      const status = await getMigrationStatus();
+      const fileSize = await getBackupFileSize();
+      setMigrationStatus(status);
+      setBackupFileSize(fileSize);
+    } catch (error) {
+      console.error('[Settings] Error loading migration status:', error);
+    }
+  };
+
+  const loadICloudStatus = async () => {
+    try {
+      const status = await getICloudStatus();
+      setICloudStatus(status);
+    } catch (error) {
+      console.error('[Settings] Error loading iCloud status:', error);
     }
   };
 
@@ -120,24 +170,9 @@ export default function SettingsScreen() {
         isTracking: tracking,
       });
 
-      // Load sync status
-      const status = getSyncStatus();
-      setSyncStatus(status);
+      // Removed sync status - app is now 100% offline
     } catch (error) {
       console.error('Error loading diagnostic info:', error);
-    }
-  };
-
-  const handleManualSync = async () => {
-    setManualSyncing(true);
-    try {
-      await syncTrips();
-      const status = getSyncStatus();
-      setSyncStatus(status);
-    } catch (error) {
-      console.error('[Settings] Error during manual sync:', error);
-    } finally {
-      setManualSyncing(false);
     }
   };
 
@@ -297,6 +332,230 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleExportSupabaseData = async () => {
+    setMigrationLoading(true);
+    try {
+      const result = await exportSupabaseData();
+
+      if (result.success) {
+        await loadMigrationStatus();
+        Alert.alert(
+          'Export Complete',
+          `Successfully exported ${result.tripCount} trips to backup file.\n\nSize: ${await getBackupFileSize()}`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Export Failed', result.error || 'Unknown error');
+      }
+    } catch (error) {
+      console.error('[Settings] Error exporting data:', error);
+      Alert.alert('Error', 'Failed to export data');
+    } finally {
+      setMigrationLoading(false);
+    }
+  };
+
+  const handleImportBackup = async () => {
+    setMigrationLoading(true);
+    try {
+      const result = await importBackupToLocal();
+
+      if (result.success) {
+        await loadMigrationStatus();
+        Alert.alert(
+          'Import Complete',
+          `Successfully imported ${result.importedCount} trips.\n${result.skippedCount} trips were already in local database.`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Import Failed', result.error || 'Unknown error');
+      }
+    } catch (error) {
+      console.error('[Settings] Error importing backup:', error);
+      Alert.alert('Error', 'Failed to import backup');
+    } finally {
+      setMigrationLoading(false);
+    }
+  };
+
+  const handleFullMigration = async () => {
+    Alert.alert(
+      'Start Full Migration?',
+      'This will:\n1. Export all trips from Supabase to a backup file\n2. Import them to your local database\n\nThis is safe and will not delete any data.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Start Migration',
+          onPress: async () => {
+            setMigrationLoading(true);
+            try {
+              const result = await performFullMigration();
+
+              if (result.success) {
+                await loadMigrationStatus();
+                Alert.alert(
+                  'Migration Complete!',
+                  `Successfully migrated:\n• Exported: ${result.exportedCount} trips\n• Imported: ${result.importedCount} trips\n\nYour data is now ready for offline-first mode.`,
+                  [{ text: 'OK' }]
+                );
+              } else {
+                Alert.alert('Migration Failed', result.error || 'Unknown error');
+              }
+            } catch (error) {
+              console.error('[Settings] Error during migration:', error);
+              Alert.alert('Error', 'Failed to complete migration');
+            } finally {
+              setMigrationLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleShareBackup = async () => {
+    try {
+      const backupPath = `${FileSystem.documentDirectory}milemate_backup.json`;
+      const fileInfo = await FileSystem.getInfoAsync(backupPath);
+
+      if (!fileInfo.exists) {
+        Alert.alert('No Backup Found', 'Please export data first.');
+        return;
+      }
+
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable) {
+        Alert.alert('Error', 'Sharing is not available on this device');
+        return;
+      }
+
+      await Sharing.shareAsync(backupPath, {
+        mimeType: 'application/json',
+        dialogTitle: 'Share MileMate Backup',
+      });
+    } catch (error) {
+      console.error('[Settings] Error sharing backup:', error);
+      Alert.alert('Error', 'Failed to share backup file');
+    }
+  };
+
+  const handleDeleteBackup = async () => {
+    Alert.alert(
+      'Delete Backup?',
+      'Are you sure you want to delete the backup file? This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const success = await deleteBackupFile();
+            if (success) {
+              await loadMigrationStatus();
+              Alert.alert('Deleted', 'Backup file has been deleted');
+            } else {
+              Alert.alert('Error', 'Failed to delete backup file');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleToggleICloud = async (enabled: boolean) => {
+    setICloudLoading(true);
+    try {
+      if (enabled) {
+        const success = await enableICloudBackup();
+        if (success) {
+          await loadICloudStatus();
+          Alert.alert(
+            'iCloud Backup Enabled',
+            'Your trips will now be backed up to iCloud automatically.',
+            [{ text: 'OK' }]
+          );
+        } else {
+          Alert.alert('Error', 'Failed to enable iCloud backup');
+        }
+      } else {
+        const success = await disableICloudBackup();
+        if (success) {
+          await loadICloudStatus();
+          Alert.alert(
+            'iCloud Backup Disabled',
+            'Your trips will no longer be backed up to iCloud.',
+            [{ text: 'OK' }]
+          );
+        } else {
+          Alert.alert('Error', 'Failed to disable iCloud backup');
+        }
+      }
+    } catch (error) {
+      console.error('[Settings] Error toggling iCloud backup:', error);
+      Alert.alert('Error', 'Failed to update iCloud backup settings');
+    } finally {
+      setICloudLoading(false);
+    }
+  };
+
+  const handleICloudBackup = async () => {
+    setICloudLoading(true);
+    try {
+      const result = await backupToICloud();
+
+      if (result.success) {
+        await loadICloudStatus();
+        Alert.alert(
+          'Backup Complete',
+          `Successfully backed up ${result.tripCount} trips to iCloud.`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Backup Failed', result.error || 'Unknown error');
+      }
+    } catch (error) {
+      console.error('[Settings] Error backing up to iCloud:', error);
+      Alert.alert('Error', 'Failed to backup to iCloud');
+    } finally {
+      setICloudLoading(false);
+    }
+  };
+
+  const handleICloudRestore = async () => {
+    Alert.alert(
+      'Restore from iCloud?',
+      'This will import all trips from your iCloud backup. Existing trips will not be duplicated.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Restore',
+          onPress: async () => {
+            setICloudLoading(true);
+            try {
+              const result = await restoreFromICloud();
+
+              if (result.success) {
+                await loadICloudStatus();
+                Alert.alert(
+                  'Restore Complete',
+                  `Successfully restored ${result.importedCount} trips from iCloud.\n${result.skippedCount} trips were already present.`,
+                  [{ text: 'OK' }]
+                );
+              } else {
+                Alert.alert('Restore Failed', result.error || 'Unknown error');
+              }
+            } catch (error) {
+              console.error('[Settings] Error restoring from iCloud:', error);
+              Alert.alert('Error', 'Failed to restore from iCloud');
+            } finally {
+              setICloudLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   if (loading) {
     return (
       <ThemedView style={styles.container}>
@@ -400,28 +659,247 @@ export default function SettingsScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.signOutButton, { borderColor: colors.error }]}
+            style={[styles.resetAppButton, { borderColor: colors.error }]}
             onPress={async () => {
               Alert.alert(
-                'Sign Out',
-                'Are you sure you want to sign out?',
+                'Reset App Data',
+                'This will clear all your data and start fresh with a new 7-day trial. This cannot be undone.',
                 [
                   { text: 'Cancel', style: 'cancel' },
                   {
-                    text: 'Sign Out',
+                    text: 'Reset',
                     style: 'destructive',
                     onPress: async () => {
-                      await signOut();
+                      await resetApp();
                     },
                   },
                 ]
               );
             }}
           >
-            <ThemedText style={[styles.signOutButtonText, { color: colors.error }]}>
-              Sign Out
+            <ThemedText style={[styles.resetAppButtonText, { color: colors.error }]}>
+              Reset App Data
             </ThemedText>
           </TouchableOpacity>
+        </ThemedView>
+
+        {/* Migration Section */}
+        <ThemedView style={[styles.section, { backgroundColor: colors.surface }]}>
+          <ThemedText type="subtitle" style={styles.sectionTitle}>
+            🔄 Data Migration
+          </ThemedText>
+          <ThemedText style={[styles.sectionDescription, { color: colors.textSecondary }]}>
+            Prepare your data for offline-first mode
+          </ThemedText>
+
+          {/* Migration Status */}
+          {migrationStatus && (
+            <ThemedView style={[styles.migrationStatus, { backgroundColor: colors.surfaceLight, borderColor: migrationStatus.isComplete ? colors.success : colors.info }]}>
+              <ThemedView style={styles.migrationRow}>
+                <ThemedText style={styles.migrationLabel}>Status:</ThemedText>
+                <ThemedText style={[styles.migrationValue, { color: migrationStatus.isComplete ? colors.success : colors.info }]}>
+                  {migrationStatus.isComplete ? '✓ Complete' : 'Not Started'}
+                </ThemedText>
+              </ThemedView>
+
+              {migrationStatus.lastExportDate && (
+                <ThemedView style={styles.migrationRow}>
+                  <ThemedText style={styles.migrationLabel}>Last Export:</ThemedText>
+                  <ThemedText style={styles.migrationValue}>
+                    {new Date(migrationStatus.lastExportDate).toLocaleDateString()}
+                  </ThemedText>
+                </ThemedView>
+              )}
+
+              {migrationStatus.exportedTripsCount > 0 && (
+                <ThemedView style={styles.migrationRow}>
+                  <ThemedText style={styles.migrationLabel}>Exported Trips:</ThemedText>
+                  <ThemedText style={styles.migrationValue}>
+                    {migrationStatus.exportedTripsCount}
+                  </ThemedText>
+                </ThemedView>
+              )}
+
+              {backupFileSize && (
+                <ThemedView style={styles.migrationRow}>
+                  <ThemedText style={styles.migrationLabel}>Backup Size:</ThemedText>
+                  <ThemedText style={styles.migrationValue}>
+                    {backupFileSize}
+                  </ThemedText>
+                </ThemedView>
+              )}
+            </ThemedView>
+          )}
+
+          {/* Migration Actions */}
+          <TouchableOpacity
+            style={[styles.button, styles.primaryButton, { backgroundColor: colors.primary, opacity: migrationLoading ? 0.5 : 1 }]}
+            onPress={handleFullMigration}
+            disabled={migrationLoading}
+          >
+            {migrationLoading ? (
+              <LoadingSpinner color="#fff" size={20} />
+            ) : (
+              <ThemedText style={[styles.primaryButtonText, { color: colors.textInverse }]}>
+                {migrationStatus?.isComplete ? '🔄 Re-run Full Migration' : '🚀 Start Full Migration'}
+              </ThemedText>
+            )}
+          </TouchableOpacity>
+
+          <ThemedView style={styles.migrationAdvanced}>
+            <ThemedText style={[styles.migrationAdvancedTitle, { color: colors.textSecondary }]}>
+              Advanced Options
+            </ThemedText>
+
+            <TouchableOpacity
+              style={[styles.button, styles.secondaryButton, { borderColor: colors.border, opacity: migrationLoading ? 0.5 : 1 }]}
+              onPress={handleExportSupabaseData}
+              disabled={migrationLoading}
+            >
+              <ThemedText style={[styles.secondaryButtonText, { color: colors.text }]}>
+                ☁️ Export from Cloud
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.button, styles.secondaryButton, { borderColor: colors.border, opacity: migrationLoading ? 0.5 : 1 }]}
+              onPress={handleImportBackup}
+              disabled={migrationLoading || !backupFileSize}
+            >
+              <ThemedText style={[styles.secondaryButtonText, { color: backupFileSize ? colors.text : colors.textTertiary }]}>
+                📥 Import to Local
+              </ThemedText>
+            </TouchableOpacity>
+
+            {backupFileSize && (
+              <>
+                <TouchableOpacity
+                  style={[styles.button, styles.secondaryButton, { borderColor: colors.border }]}
+                  onPress={handleShareBackup}
+                >
+                  <ThemedText style={[styles.secondaryButtonText, { color: colors.text }]}>
+                    📤 Share Backup File
+                  </ThemedText>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.button, styles.secondaryButton, { borderColor: colors.error }]}
+                  onPress={handleDeleteBackup}
+                >
+                  <ThemedText style={[styles.secondaryButtonText, { color: colors.error }]}>
+                    🗑️ Delete Backup
+                  </ThemedText>
+                </TouchableOpacity>
+              </>
+            )}
+          </ThemedView>
+
+          <ThemedView style={[styles.infoBox, { backgroundColor: colors.surfaceLight }]}>
+            <ThemedText style={[styles.infoBoxText, { color: colors.textSecondary }]}>
+              💡 The full migration will safely export all your trips from the cloud and import them to local storage. This prepares your data for offline-first mode.
+            </ThemedText>
+          </ThemedView>
+        </ThemedView>
+
+        {/* iCloud Backup Section */}
+        <ThemedView style={[styles.section, { backgroundColor: colors.surface }]}>
+          <ThemedText type="subtitle" style={styles.sectionTitle}>
+            ☁️ iCloud Backup
+          </ThemedText>
+          <ThemedText style={[styles.sectionDescription, { color: colors.textSecondary }]}>
+            Optional cloud backup for your trips (iOS only)
+          </ThemedText>
+
+          {/* iCloud Toggle */}
+          <ThemedView style={styles.settingRow}>
+            <ThemedView style={styles.settingInfo}>
+              <ThemedText type="subtitle">Enable iCloud Backup</ThemedText>
+              <ThemedText style={[styles.settingDescription, { color: colors.textSecondary }]}>
+                Automatically backup trips to iCloud
+              </ThemedText>
+            </ThemedView>
+            <Switch
+              value={iCloudStatus?.enabled || false}
+              onValueChange={handleToggleICloud}
+              disabled={iCloudLoading || Platform.OS !== 'ios'}
+            />
+          </ThemedView>
+
+          {Platform.OS !== 'ios' && (
+            <ThemedText style={[styles.settingDescription, { color: colors.warning, marginTop: Spacing.sm }]}>
+              ⚠️ iCloud backup is only available on iOS devices
+            </ThemedText>
+          )}
+
+          {/* iCloud Status */}
+          {iCloudStatus && iCloudStatus.enabled && (
+            <ThemedView style={[styles.migrationStatus, { backgroundColor: colors.surfaceLight, borderColor: colors.success, marginTop: Spacing.md }]}>
+              <ThemedView style={styles.migrationRow}>
+                <ThemedText style={styles.migrationLabel}>Status:</ThemedText>
+                <ThemedText style={[styles.migrationValue, { color: colors.success }]}>
+                  ✓ Active
+                </ThemedText>
+              </ThemedView>
+
+              {iCloudStatus.lastBackupTime && (
+                <ThemedView style={styles.migrationRow}>
+                  <ThemedText style={styles.migrationLabel}>Last Backup:</ThemedText>
+                  <ThemedText style={styles.migrationValue}>
+                    {new Date(iCloudStatus.lastBackupTime).toLocaleString()}
+                  </ThemedText>
+                </ThemedView>
+              )}
+
+              <ThemedView style={styles.migrationRow}>
+                <ThemedText style={styles.migrationLabel}>Backed Up Trips:</ThemedText>
+                <ThemedText style={styles.migrationValue}>
+                  {iCloudStatus.tripCount}
+                </ThemedText>
+              </ThemedView>
+
+              <ThemedView style={styles.migrationRow}>
+                <ThemedText style={styles.migrationLabel}>Backup Size:</ThemedText>
+                <ThemedText style={styles.migrationValue}>
+                  {iCloudStatus.backupSize}
+                </ThemedText>
+              </ThemedView>
+            </ThemedView>
+          )}
+
+          {/* iCloud Actions */}
+          {iCloudStatus?.enabled && (
+            <ThemedView style={{ marginTop: Spacing.md }}>
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton, { backgroundColor: colors.primary, opacity: iCloudLoading ? 0.5 : 1 }]}
+                onPress={handleICloudBackup}
+                disabled={iCloudLoading}
+              >
+                {iCloudLoading ? (
+                  <LoadingSpinner color="#fff" size={20} />
+                ) : (
+                  <ThemedText style={[styles.primaryButtonText, { color: colors.textInverse }]}>
+                    📤 Backup Now
+                  </ThemedText>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton, { borderColor: colors.border, marginTop: Spacing.sm, opacity: iCloudLoading ? 0.5 : 1 }]}
+                onPress={handleICloudRestore}
+                disabled={iCloudLoading}
+              >
+                <ThemedText style={[styles.secondaryButtonText, { color: colors.text }]}>
+                  📥 Restore from iCloud
+                </ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          )}
+
+          <ThemedView style={[styles.infoBox, { backgroundColor: colors.surfaceLight, marginTop: Spacing.md }]}>
+            <ThemedText style={[styles.infoBoxText, { color: colors.textSecondary }]}>
+              💡 iCloud backup is optional and disabled by default. All your data stays on your device. Enable iCloud backup if you want to sync trips across your Apple devices or have a cloud backup.
+            </ThemedText>
+          </ThemedView>
         </ThemedView>
 
       <ThemedView style={[styles.section, { backgroundColor: colors.surface }]}>
@@ -510,50 +988,7 @@ export default function SettingsScreen() {
               </>
             )}
 
-            {/* Sync Status */}
-            <ThemedView style={[styles.diagnosticRow, { marginTop: Spacing.lg, paddingTop: Spacing.lg, borderTopWidth: 1, borderTopColor: colors.border }]}>
-              <ThemedText style={styles.diagnosticLabel}>🔄 Cloud Sync Status:</ThemedText>
-              <ThemedText style={[styles.diagnosticValue, { color: syncStatus?.isSyncing ? colors.warning : (syncStatus?.lastSyncSuccess ? colors.success : colors.error) }]}>
-                {syncStatus?.isSyncing ? 'Syncing...' : (syncStatus?.lastSyncSuccess ? '✓ Synced' : (syncStatus?.lastSyncTime ? '✗ Error' : 'Not yet synced'))}
-              </ThemedText>
-            </ThemedView>
-
-            {syncStatus?.lastSyncTime && (
-              <ThemedView style={styles.diagnosticRow}>
-                <ThemedText style={styles.diagnosticLabel}>Last Sync:</ThemedText>
-                <ThemedText style={styles.diagnosticValue}>
-                  {new Date(syncStatus.lastSyncTime).toLocaleString()}
-                </ThemedText>
-              </ThemedView>
-            )}
-
-            {syncStatus && (syncStatus.tripsUploaded > 0 || syncStatus.tripsDownloaded > 0) && (
-              <ThemedView style={styles.diagnosticRow}>
-                <ThemedText style={styles.diagnosticLabel}>Last Sync Result:</ThemedText>
-                <ThemedText style={styles.diagnosticValue}>
-                  ↑{syncStatus.tripsUploaded} uploaded, ↓{syncStatus.tripsDownloaded} downloaded
-                </ThemedText>
-              </ThemedView>
-            )}
-
-            {syncStatus?.lastSyncError && (
-              <ThemedView style={styles.diagnosticRow}>
-                <ThemedText style={styles.diagnosticLabel}>Error:</ThemedText>
-                <ThemedText style={[styles.diagnosticValue, { color: colors.error }]} numberOfLines={2}>
-                  {syncStatus.lastSyncError}
-                </ThemedText>
-              </ThemedView>
-            )}
-
-            <TouchableOpacity
-              style={[styles.button, styles.primaryButton, { backgroundColor: colors.primary, opacity: manualSyncing ? 0.5 : 1, marginTop: Spacing.md }]}
-              onPress={handleManualSync}
-              disabled={manualSyncing}
-            >
-              <ThemedText style={[styles.primaryButtonText, { color: colors.textInverse }]}>
-                {manualSyncing ? 'Syncing...' : '🔄 Sync Now'}
-              </ThemedText>
-            </TouchableOpacity>
+            {/* Sync removed - app is now 100% offline */}
 
             <TouchableOpacity
               style={[styles.button, styles.secondaryButton, { borderColor: colors.border, marginTop: Spacing.sm }]}
@@ -1512,14 +1947,14 @@ const styles = StyleSheet.create({
     fontWeight: Typography.semibold,
     color: Colors.text,
   },
-  signOutButton: {
+  resetAppButton: {
     padding: Spacing.md,
     borderRadius: BorderRadius.md,
     borderWidth: 1.5,
     alignItems: 'center',
     marginTop: Spacing.sm,
   },
-  signOutButtonText: {
+  resetAppButtonText: {
     fontSize: Typography.base,
     fontWeight: Typography.semibold,
   },
@@ -1544,5 +1979,45 @@ const styles = StyleSheet.create({
   restorePurchasesButtonText: {
     fontSize: Typography.base,
     fontWeight: Typography.semibold,
+  },
+  migrationStatus: {
+    marginTop: Spacing.md,
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 2,
+    gap: Spacing.sm,
+  },
+  migrationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  migrationLabel: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.medium,
+    color: Colors.textSecondary,
+  },
+  migrationValue: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.semibold,
+    color: Colors.text,
+  },
+  migrationAdvanced: {
+    marginTop: Spacing.md,
+    gap: Spacing.sm,
+  },
+  migrationAdvancedTitle: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.semibold,
+    marginBottom: Spacing.xs,
+  },
+  infoBox: {
+    marginTop: Spacing.md,
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+  },
+  infoBoxText: {
+    fontSize: Typography.sm,
+    lineHeight: 20,
   },
 });

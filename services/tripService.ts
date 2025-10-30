@@ -1,12 +1,68 @@
-import { supabase } from './supabase';
-import { getCurrentUser } from './authService';
-import { getRateForYear } from './mileageRateService';
-import { getActiveVehicle, updateVehicleMileage } from './vehicleService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Trip } from './tripTypes';
-import { addToQueue } from './offlineQueue';
+import {
+  saveLocalTrip,
+  getLocalTrips,
+  getLocalTripsByDateRange,
+  updateLocalTrip as updateLocalTripDB,
+  deleteLocalTrip,
+  getLocalTripStats,
+  getLocalTripStatsForToday,
+  getLocalTripStatsForCurrentMonth,
+  getLocalTripStatsForYear,
+  getLocalBusinessDeductibleForToday,
+  getLocalBusinessDeductibleForCurrentMonth,
+  getLocalBusinessDeductibleForYear,
+  LocalTrip,
+} from './localDatabase';
+import { getRateForYear } from './mileageRateService';
+import { backupToICloud, isICloudBackupEnabled } from './iCloudBackup';
 
 // Re-export Trip type for backward compatibility
 export type { Trip };
+
+const USER_ID_KEY = 'user_id';
+
+/**
+ * Get current user ID from local storage
+ */
+async function getCurrentUserId(): Promise<string> {
+  const userId = await AsyncStorage.getItem(USER_ID_KEY);
+  if (!userId) {
+    throw new Error('No user logged in');
+  }
+  return userId;
+}
+
+/**
+ * Generate a unique trip ID
+ */
+function generateTripId(): string {
+  return `trip_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Convert LocalTrip to Trip format (for backward compatibility)
+ */
+function localTripToTrip(localTrip: LocalTrip): Trip {
+  return {
+    id: localTrip.id,
+    user_id: localTrip.user_id,
+    start_location: localTrip.start_location,
+    end_location: localTrip.end_location,
+    start_latitude: localTrip.start_latitude,
+    start_longitude: localTrip.start_longitude,
+    end_latitude: localTrip.end_latitude,
+    end_longitude: localTrip.end_longitude,
+    distance: localTrip.distance,
+    start_time: localTrip.start_time,
+    end_time: localTrip.end_time,
+    purpose: localTrip.purpose,
+    notes: localTrip.notes,
+    created_at: new Date(localTrip.created_at).toISOString(),
+    updated_at: new Date(localTrip.updated_at).toISOString(),
+  };
+}
 
 /**
  * Validates trip data before saving
@@ -84,8 +140,7 @@ function validateTrip(trip: Omit<Trip, 'id' | 'user_id' | 'created_at' | 'update
 }
 
 /**
- * Create a new trip
- * Now with offline queue support - if save fails, trip is queued for retry
+ * Create a new trip (offline-first)
  */
 export async function createTrip(
   trip: Omit<Trip, 'id' | 'user_id' | 'created_at' | 'updated_at'>
@@ -94,209 +149,133 @@ export async function createTrip(
   validateTrip(trip);
 
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      throw new Error('No user logged in');
-    }
+    const userId = await getCurrentUserId();
+    const tripId = generateTripId();
 
-    // Update vehicle mileage BEFORE saving (so it happens even if save fails)
-    // When queued trip is processed later, it won't update mileage again
-    try {
-      const activeVehicle = await getActiveVehicle();
-      if (activeVehicle) {
-        await updateVehicleMileage(activeVehicle.id, trip.distance);
-        console.log('[Trip Create] ✅ Vehicle mileage updated');
-      }
-    } catch (vehicleError) {
-      // Don't fail trip creation if vehicle update fails
-      console.error('[Trip Create] Error updating vehicle mileage:', vehicleError);
-    }
+    // Save to local database
+    await saveLocalTrip({
+      id: tripId,
+      user_id: userId,
+      start_location: trip.start_location,
+      end_location: trip.end_location,
+      start_latitude: trip.start_latitude,
+      start_longitude: trip.start_longitude,
+      end_latitude: trip.end_latitude,
+      end_longitude: trip.end_longitude,
+      distance: trip.distance,
+      start_time: trip.start_time,
+      end_time: trip.end_time,
+      purpose: trip.purpose,
+      notes: trip.notes || '',
+    });
 
-    // Try to save trip to Supabase
-    const { data, error } = await supabase
-      .from('trips')
-      .insert({
-        user_id: user.id,
-        ...trip,
-      })
-      .select()
-      .single();
+    console.log('[Trip Create] ✅ Trip saved to local database:', tripId);
 
-    if (error) {
-      console.error('[Trip Create] Error saving to Supabase:', error);
+    // Auto-backup to iCloud if enabled (non-blocking)
+    autoBackupToICloud();
 
-      // Categorize the error to determine if it's retryable
-      const isNetworkError = error.message?.includes('fetch') ||
-                            error.message?.includes('network') ||
-                            error.message?.includes('Failed to fetch');
-      const isServerError = error.message?.includes('500') ||
-                           error.message?.includes('502') ||
-                           error.message?.includes('503');
-
-      if (isNetworkError || isServerError) {
-        // This is a retryable error - add to offline queue
-        console.log('[Trip Create] Adding to offline queue for retry...');
-
-        // Create a trip object for the queue (with generated ID)
-        const queuedTrip: Trip = {
-          id: `temp_${Date.now()}`, // Temporary ID for queue
-          user_id: user.id,
-          ...trip,
-        };
-
-        await addToQueue('create', queuedTrip);
-        console.log('[Trip Create] ✅ Trip queued for retry when online');
-
-        // Throw a specific error so caller knows it was queued
-        const queuedError = new Error('Trip queued for upload when connection available');
-        (queuedError as any).queued = true;
-        throw queuedError;
-      }
-
-      // Non-retryable error - just throw
-      throw new Error('Failed to save trip to database');
-    }
-
-    console.log('[Trip Create] ✅ Trip saved successfully');
-    return data;
+    // Return the trip in expected format
+    return {
+      id: tripId,
+      user_id: userId,
+      ...trip,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
   } catch (error) {
     console.error('[Trip Create] Error creating trip:', error);
     throw error;
   }
 }
 
+/**
+ * Get all trips for the current user
+ */
 export async function getAllTrips(): Promise<Trip[]> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('No user logged in');
-      return [];
-    }
+    const userId = await getCurrentUserId();
+    const localTrips = await getLocalTrips(userId);
 
-    const { data, error } = await supabase
-      .from('trips')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('is_deleted', false)
-      .order('start_time', { ascending: false });
-
-    if (error) {
-      console.error('Error getting all trips:', error);
-      return []; // Return empty array instead of throwing
-    }
-
-    return data || [];
+    return localTrips.map(localTripToTrip);
   } catch (error) {
     console.error('Error getting all trips:', error);
-    return []; // Return empty array on any error
+    return [];
   }
 }
 
+/**
+ * Get a single trip by ID
+ */
 export async function getTripById(id: string): Promise<Trip | null> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('No user logged in');
-      return null;
-    }
+    const userId = await getCurrentUserId();
+    const localTrips = await getLocalTrips(userId);
+    const trip = localTrips.find(t => t.id === id);
 
-    const { data, error } = await supabase
-      .from('trips')
-      .select('*')
-      .eq('id', id)
-      .eq('user_id', user.id)
-      .eq('is_deleted', false)
-      .single();
-
-    if (error) {
-      console.error('Error getting trip:', error);
-      return null;
-    }
-
-    return data;
+    return trip ? localTripToTrip(trip) : null;
   } catch (error) {
     console.error('Error getting trip:', error);
     return null;
   }
 }
 
+/**
+ * Get trips filtered by purpose
+ */
 export async function getTripsByPurpose(purpose: string): Promise<Trip[]> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('No user logged in');
-      return [];
-    }
+    const userId = await getCurrentUserId();
+    const localTrips = await getLocalTrips(userId);
+    const filtered = localTrips.filter(t => t.purpose === purpose);
 
-    const { data, error } = await supabase
-      .from('trips')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('purpose', purpose)
-      .eq('is_deleted', false)
-      .order('start_time', { ascending: false});
-
-    if (error) {
-      console.error('Error getting trips by purpose:', error);
-      return [];
-    }
-
-    return data || [];
+    return filtered.map(localTripToTrip);
   } catch (error) {
     console.error('Error getting trips by purpose:', error);
     return [];
   }
 }
 
+/**
+ * Get trips within a date range
+ */
 export async function getTripsByDateRange(startDate: number, endDate: number): Promise<Trip[]> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.error('No user logged in');
-      return [];
-    }
+    const userId = await getCurrentUserId();
+    const localTrips = await getLocalTripsByDateRange(userId, startDate, endDate);
 
-    const { data, error } = await supabase
-      .from('trips')
-      .select('*')
-      .eq('user_id', user.id)
-      .gte('start_time', startDate)
-      .lte('start_time', endDate)
-      .eq('is_deleted', false)
-      .order('start_time', { ascending: false });
-
-    if (error) {
-      console.error('Error getting trips by date range:', error);
-      return [];
-    }
-
-    return data || [];
+    return localTrips.map(localTripToTrip);
   } catch (error) {
     console.error('Error getting trips by date range:', error);
     return [];
   }
 }
 
+/**
+ * Update an existing trip
+ */
 export async function updateTrip(
   id: string,
   trip: Partial<Omit<Trip, 'id' | 'user_id' | 'created_at' | 'updated_at'>>
 ): Promise<void> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      throw new Error('No user logged in');
+    const userId = await getCurrentUserId();
+
+    // Only allow updating purpose and notes (as defined in updateLocalTrip)
+    const updates: { purpose?: any; notes?: string } = {};
+
+    if (trip.purpose !== undefined) {
+      updates.purpose = trip.purpose;
     }
 
-    const { error } = await supabase
-      .from('trips')
-      .update(trip)
-      .eq('id', id)
-      .eq('user_id', user.id);
-
-    if (error) {
-      console.error('Error updating trip:', error);
-      throw error;
+    if (trip.notes !== undefined) {
+      updates.notes = trip.notes;
     }
+
+    await updateLocalTripDB(id, updates);
+    console.log('[Trip Update] ✅ Trip updated:', id);
+
+    // Auto-backup to iCloud if enabled (non-blocking)
+    autoBackupToICloud();
   } catch (error) {
     console.error('Error updating trip:', error);
     throw error;
@@ -304,8 +283,7 @@ export async function updateTrip(
 }
 
 /**
- * Delete a trip (soft delete)
- * Uses offline queue to handle deletions when offline
+ * Delete a trip
  */
 export async function deleteTrip(id: string): Promise<void> {
   if (!id) {
@@ -313,49 +291,18 @@ export async function deleteTrip(id: string): Promise<void> {
   }
 
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      throw new Error('No user logged in');
-    }
-
-    // Get the trip data before deleting (needed for offline queue)
-    const trip = await getTripById(id);
-    if (!trip) {
-      throw new Error('Trip not found');
-    }
-
-    // Soft delete in Supabase
-    const { error } = await supabase
-      .from('trips')
-      .update({
-        is_deleted: true,
-        deleted_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .eq('user_id', user.id);
-
-    if (error) {
-      console.error('[Trip Delete] Error deleting from Supabase:', error);
-
-      // If delete failed, add to offline queue for retry
-      // This will retry automatically when back online
-      console.log('[Trip Delete] Using offline queue for deletion');
-
-      await addToQueue('delete', trip);
-
-      // Even though Supabase failed, we consider this successful
-      // because it's queued for retry
-      console.log('[Trip Delete] ✅ Deletion queued for retry');
-      return;
-    }
-
-    console.log('[Trip Delete] ✅ Trip deleted successfully');
+    const userId = await getCurrentUserId();
+    await deleteLocalTrip(id);
+    console.log('[Trip Delete] ✅ Trip deleted:', id);
   } catch (error) {
     console.error('[Trip Delete] Error deleting trip:', error);
     throw error;
   }
 }
 
+/**
+ * Get overall trip statistics
+ */
 export async function getTripStats(): Promise<{
   totalTrips: number;
   totalDistance: number;
@@ -365,36 +312,8 @@ export async function getTripStats(): Promise<{
   personalDistance: number;
 }> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return {
-        totalTrips: 0,
-        totalDistance: 0,
-        businessTrips: 0,
-        personalTrips: 0,
-        businessDistance: 0,
-        personalDistance: 0,
-      };
-    }
-
-    const { data: allTrips } = await supabase
-      .from('trips')
-      .select('distance, purpose')
-      .eq('user_id', user.id)
-      .eq('is_deleted', false);
-
-    const trips = allTrips || [];
-    const businessTripsData = trips.filter((t) => t.purpose === 'business');
-    const personalTripsData = trips.filter((t) => t.purpose === 'personal');
-
-    return {
-      totalTrips: trips.length,
-      totalDistance: trips.reduce((sum, t) => sum + (t.distance || 0), 0),
-      businessTrips: businessTripsData.length,
-      personalTrips: personalTripsData.length,
-      businessDistance: businessTripsData.reduce((sum, t) => sum + (t.distance || 0), 0),
-      personalDistance: personalTripsData.reduce((sum, t) => sum + (t.distance || 0), 0),
-    };
+    const userId = await getCurrentUserId();
+    return await getLocalTripStats(userId);
   } catch (error) {
     console.error('Error getting trip stats:', error);
     return {
@@ -420,41 +339,8 @@ export async function getTripStatsForYear(year: number): Promise<{
   personalDistance: number;
 }> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return {
-        totalTrips: 0,
-        totalDistance: 0,
-        businessTrips: 0,
-        personalTrips: 0,
-        businessDistance: 0,
-        personalDistance: 0,
-      };
-    }
-
-    const startOfYear = new Date(year, 0, 1).getTime();
-    const endOfYear = new Date(year, 11, 31, 23, 59, 59, 999).getTime();
-
-    const { data: allTrips } = await supabase
-      .from('trips')
-      .select('distance, purpose')
-      .eq('user_id', user.id)
-      .gte('start_time', startOfYear)
-      .lte('start_time', endOfYear)
-      .eq('is_deleted', false);
-
-    const trips = allTrips || [];
-    const businessTripsData = trips.filter((t) => t.purpose === 'business');
-    const personalTripsData = trips.filter((t) => t.purpose === 'personal');
-
-    return {
-      totalTrips: trips.length,
-      totalDistance: trips.reduce((sum, t) => sum + (t.distance || 0), 0),
-      businessTrips: businessTripsData.length,
-      personalTrips: personalTripsData.length,
-      businessDistance: businessTripsData.reduce((sum, t) => sum + (t.distance || 0), 0),
-      personalDistance: personalTripsData.reduce((sum, t) => sum + (t.distance || 0), 0),
-    };
+    const userId = await getCurrentUserId();
+    return await getLocalTripStatsForYear(userId, year);
   } catch (error) {
     console.error('Error getting trip stats for year:', error);
     return {
@@ -480,42 +366,8 @@ export async function getTripStatsForToday(): Promise<{
   personalDistance: number;
 }> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return {
-        totalTrips: 0,
-        totalDistance: 0,
-        businessTrips: 0,
-        personalTrips: 0,
-        businessDistance: 0,
-        personalDistance: 0,
-      };
-    }
-
-    const today = new Date();
-    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-    const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).getTime();
-
-    const { data: allTrips } = await supabase
-      .from('trips')
-      .select('distance, purpose')
-      .eq('user_id', user.id)
-      .gte('start_time', startOfDay)
-      .lte('start_time', endOfDay)
-      .eq('is_deleted', false);
-
-    const trips = allTrips || [];
-    const businessTripsData = trips.filter((t) => t.purpose === 'business');
-    const personalTripsData = trips.filter((t) => t.purpose === 'personal');
-
-    return {
-      totalTrips: trips.length,
-      totalDistance: trips.reduce((sum, t) => sum + (t.distance || 0), 0),
-      businessTrips: businessTripsData.length,
-      personalTrips: personalTripsData.length,
-      businessDistance: businessTripsData.reduce((sum, t) => sum + (t.distance || 0), 0),
-      personalDistance: personalTripsData.reduce((sum, t) => sum + (t.distance || 0), 0),
-    };
+    const userId = await getCurrentUserId();
+    return await getLocalTripStatsForToday(userId);
   } catch (error) {
     console.error('Error getting trip stats for today:', error);
     return {
@@ -541,42 +393,8 @@ export async function getTripStatsForCurrentMonth(): Promise<{
   personalDistance: number;
 }> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return {
-        totalTrips: 0,
-        totalDistance: 0,
-        businessTrips: 0,
-        personalTrips: 0,
-        businessDistance: 0,
-        personalDistance: 0,
-      };
-    }
-
-    const today = new Date();
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999).getTime();
-
-    const { data: allTrips } = await supabase
-      .from('trips')
-      .select('distance, purpose')
-      .eq('user_id', user.id)
-      .gte('start_time', startOfMonth)
-      .lte('start_time', endOfMonth)
-      .eq('is_deleted', false);
-
-    const trips = allTrips || [];
-    const businessTripsData = trips.filter((t) => t.purpose === 'business');
-    const personalTripsData = trips.filter((t) => t.purpose === 'personal');
-
-    return {
-      totalTrips: trips.length,
-      totalDistance: trips.reduce((sum, t) => sum + (t.distance || 0), 0),
-      businessTrips: businessTripsData.length,
-      personalTrips: personalTripsData.length,
-      businessDistance: businessTripsData.reduce((sum, t) => sum + (t.distance || 0), 0),
-      personalDistance: personalTripsData.reduce((sum, t) => sum + (t.distance || 0), 0),
-    };
+    const userId = await getCurrentUserId();
+    return await getLocalTripStatsForCurrentMonth(userId);
   } catch (error) {
     console.error('Error getting trip stats for current month:', error);
     return {
@@ -590,6 +408,9 @@ export async function getTripStatsForCurrentMonth(): Promise<{
   }
 }
 
+/**
+ * Get monthly statistics for a specific month
+ */
 export async function getMonthlyStats(
   year: number,
   month: number
@@ -599,29 +420,17 @@ export async function getMonthlyStats(
   businessDistance: number;
 }> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { trips: 0, distance: 0, businessDistance: 0 };
-    }
-
+    const userId = await getCurrentUserId();
     const startOfMonth = new Date(year, month - 1, 1).getTime();
     const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999).getTime();
 
-    const { data: allTrips } = await supabase
-      .from('trips')
-      .select('distance, purpose')
-      .eq('user_id', user.id)
-      .gte('start_time', startOfMonth)
-      .lte('start_time', endOfMonth)
-      .eq('is_deleted', false);
-
-    const trips = allTrips || [];
-    const businessTripsData = trips.filter((t) => t.purpose === 'business');
+    const trips = await getLocalTripsByDateRange(userId, startOfMonth, endOfMonth);
+    const businessTrips = trips.filter(t => t.purpose === 'business');
 
     return {
       trips: trips.length,
-      distance: trips.reduce((sum, t) => sum + (t.distance || 0), 0),
-      businessDistance: businessTripsData.reduce((sum, t) => sum + (t.distance || 0), 0),
+      distance: trips.reduce((sum, t) => sum + t.distance, 0),
+      businessDistance: businessTrips.reduce((sum, t) => sum + t.distance, 0),
     };
   } catch (error) {
     console.error('Error getting monthly stats:', error);
@@ -634,25 +443,17 @@ export async function getMonthlyStats(
  */
 export async function getBusinessDeductibleValue(): Promise<number> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return 0;
-    }
+    const userId = await getCurrentUserId();
+    const trips = await getLocalTrips(userId);
+    const businessTrips = trips.filter(t => t.purpose === 'business');
 
-    const { data: trips } = await supabase
-      .from('trips')
-      .select('start_time, distance')
-      .eq('user_id', user.id)
-      .eq('purpose', 'business')
-      .eq('is_deleted', false);
-
-    if (!trips || trips.length === 0) {
+    if (businessTrips.length === 0) {
       return 0;
     }
 
     // Group by year and calculate
     const yearTotals = new Map<number, number>();
-    trips.forEach((trip) => {
+    businessTrips.forEach((trip) => {
       const year = new Date(trip.start_time).getFullYear();
       yearTotals.set(year, (yearTotals.get(year) || 0) + trip.distance);
     });
@@ -675,27 +476,9 @@ export async function getBusinessDeductibleValue(): Promise<number> {
  */
 export async function getBusinessDeductibleValueForYear(year: number): Promise<number> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return 0;
-    }
-
-    const startOfYear = new Date(year, 0, 1).getTime();
-    const endOfYear = new Date(year, 11, 31, 23, 59, 59, 999).getTime();
-
-    const { data: trips } = await supabase
-      .from('trips')
-      .select('distance')
-      .eq('user_id', user.id)
-      .eq('purpose', 'business')
-      .gte('start_time', startOfYear)
-      .lte('start_time', endOfYear)
-      .eq('is_deleted', false);
-
-    const distance = (trips || []).reduce((sum, t) => sum + (t.distance || 0), 0);
+    const userId = await getCurrentUserId();
     const rate = await getRateForYear(year);
-
-    return distance * rate;
+    return await getLocalBusinessDeductibleForYear(userId, year, rate);
   } catch (error) {
     console.error('Error calculating business deductible value for year:', error);
     return 0;
@@ -707,28 +490,10 @@ export async function getBusinessDeductibleValueForYear(year: number): Promise<n
  */
 export async function getBusinessDeductibleValueForToday(): Promise<number> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return 0;
-    }
-
-    const today = new Date();
-    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-    const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).getTime();
-
-    const { data: trips } = await supabase
-      .from('trips')
-      .select('distance')
-      .eq('user_id', user.id)
-      .eq('purpose', 'business')
-      .gte('start_time', startOfDay)
-      .lte('start_time', endOfDay)
-      .eq('is_deleted', false);
-
-    const distance = (trips || []).reduce((sum, t) => sum + (t.distance || 0), 0);
-    const rate = await getRateForYear(today.getFullYear());
-
-    return distance * rate;
+    const userId = await getCurrentUserId();
+    const currentYear = new Date().getFullYear();
+    const rate = await getRateForYear(currentYear);
+    return await getLocalBusinessDeductibleForToday(userId, rate);
   } catch (error) {
     console.error('Error calculating business deductible value for today:', error);
     return 0;
@@ -740,30 +505,32 @@ export async function getBusinessDeductibleValueForToday(): Promise<number> {
  */
 export async function getBusinessDeductibleValueForCurrentMonth(): Promise<number> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return 0;
-    }
-
-    const today = new Date();
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999).getTime();
-
-    const { data: trips } = await supabase
-      .from('trips')
-      .select('distance')
-      .eq('user_id', user.id)
-      .eq('purpose', 'business')
-      .gte('start_time', startOfMonth)
-      .lte('start_time', endOfMonth)
-      .eq('is_deleted', false);
-
-    const distance = (trips || []).reduce((sum, t) => sum + (t.distance || 0), 0);
-    const rate = await getRateForYear(today.getFullYear());
-
-    return distance * rate;
+    const userId = await getCurrentUserId();
+    const currentYear = new Date().getFullYear();
+    const rate = await getRateForYear(currentYear);
+    return await getLocalBusinessDeductibleForCurrentMonth(userId, rate);
   } catch (error) {
     console.error('Error calculating business deductible value for current month:', error);
     return 0;
   }
+}
+
+/**
+ * Auto-backup to iCloud if enabled (runs in background, non-blocking)
+ */
+function autoBackupToICloud(): void {
+  // Run backup in background without blocking the UI
+  (async () => {
+    try {
+      const enabled = await isICloudBackupEnabled();
+      if (enabled) {
+        console.log('[Trip] Auto-backing up to iCloud...');
+        await backupToICloud();
+        console.log('[Trip] ✅ Auto-backup to iCloud complete');
+      }
+    } catch (error) {
+      console.error('[Trip] Error during auto-backup to iCloud:', error);
+      // Don't throw - backup failures should not block trip operations
+    }
+  })();
 }

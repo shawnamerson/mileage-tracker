@@ -1,32 +1,33 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { Session, User } from '@supabase/supabase-js';
-import { supabase, Profile } from '@/services/supabase';
-import { getUserProfile, signOut as authSignOut } from '@/services/authService';
-import { initializeSync } from '@/services/syncService';
+import {
+  initializeUser,
+  getUserProfile,
+  resetAppData,
+  LocalUser,
+  LocalProfile,
+  type Profile,
+} from '@/services/authService';
 import { clearLocalDatabase } from '@/services/localDatabase';
 
 interface AuthContextType {
-  session: Session | null;
-  user: User | null;
-  profile: Profile | null;
+  user: LocalUser | null;
+  profile: LocalProfile | null;
   loading: boolean;
-  signOut: () => Promise<void>;
+  resetApp: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
-  session: null,
   user: null,
   profile: null,
   loading: true,
-  signOut: async () => {},
+  resetApp: async () => {},
   refreshProfile: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [user, setUser] = useState<LocalUser | null>(null);
+  const [profile, setProfile] = useState<LocalProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Fetch user profile
@@ -35,7 +36,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const userProfile = await getUserProfile(userId);
       setProfile(userProfile);
     } catch (error) {
-      console.error('Error fetching profile:', error);
+      console.error('[AuthContext] Error fetching profile:', error);
       setProfile(null);
     }
   };
@@ -47,117 +48,64 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Sign out
-  const handleSignOut = async () => {
+  // Reset app (clear all data and start fresh)
+  const handleResetApp = async () => {
     try {
-      console.log('[Auth] Signing out...');
+      console.log('[AuthContext] Resetting app...');
 
-      // Add timeout to prevent hanging
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Sign out timeout')), 5000)
-      );
-
-      // Use authService.signOut() which clears user cache
-      const signOutPromise = authSignOut();
-
-      await Promise.race([signOutPromise, timeoutPromise]).catch(error => {
-        console.log('[Auth] Supabase sign out failed (continuing anyway):', error.message);
-      });
-
-      // Clear state regardless of whether Supabase call succeeded
-      setSession(null);
-      setUser(null);
-      setProfile(null);
-
-      // Clear local SQLite database to prevent orphaned data
-      console.log('[Auth] Clearing local database...');
+      // Clear local SQLite database
+      console.log('[AuthContext] Clearing local database...');
       await clearLocalDatabase().catch(error => {
-        console.error('[Auth] Error clearing local database (continuing):', error);
+        console.error('[AuthContext] Error clearing local database (continuing):', error);
       });
 
-      console.log('[Auth] ✅ Signed out successfully');
+      // Reset auth data
+      await resetAppData();
+
+      // Re-initialize user
+      const newUser = await initializeUser();
+      setUser(newUser);
+
+      const newProfile = await getUserProfile(newUser.id);
+      setProfile(newProfile);
+
+      console.log('[AuthContext] ✅ App reset successfully');
     } catch (error) {
-      console.error('[Auth] Error signing out:', error);
-      // Force clear state even on error
-      setSession(null);
-      setUser(null);
-      setProfile(null);
-      // Attempt to clear local database even on error
-      clearLocalDatabase().catch(() => {});
+      console.error('[AuthContext] Error resetting app:', error);
+      throw error;
     }
   };
 
-  // Initialize auth state
+  // Initialize user on first app launch
   useEffect(() => {
-    // Add timeout protection to prevent app from hanging
-    const initTimeout = setTimeout(() => {
-      console.warn('Auth initialization timeout - setting loading to false');
-      setLoading(false);
-    }, 10000); // 10 second timeout
+    const initAuth = async () => {
+      try {
+        console.log('[AuthContext] Initializing user...');
 
-    // Get initial session
-    supabase.auth.getSession()
-      .then(({ data: { session } }) => {
-        clearTimeout(initTimeout);
-        setSession(session);
-        setUser(session?.user ?? null);
+        // Auto-create user if doesn't exist
+        const initializedUser = await initializeUser();
+        setUser(initializedUser);
 
-        if (session?.user) {
-          // Fetch profile in background - don't block initial load
-          fetchProfile(session.user.id).catch((error) => {
-            console.error('[Auth] Error fetching initial profile:', error);
-          });
-          // Sync will be initialized by onAuthStateChange listener
-        }
+        // Load profile
+        const userProfile = await getUserProfile(initializedUser.id);
+        setProfile(userProfile);
 
+        console.log('[AuthContext] User initialized:', initializedUser.email);
+      } catch (error) {
+        console.error('[AuthContext] Error initializing user:', error);
+      } finally {
         setLoading(false);
-      })
-      .catch((error) => {
-        clearTimeout(initTimeout);
-        console.error('Error getting initial session:', error);
-        // Set loading to false even on error to prevent infinite loading
-        setLoading(false);
-      });
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      console.log('Auth state changed:', _event);
-      setSession(session);
-      setUser(session?.user ?? null);
-
-      if (session?.user) {
-        console.log('[Auth] User signed in, fetching profile...');
-        // Fetch profile in background - don't block sync initialization
-        fetchProfile(session.user.id).catch((error) => {
-          console.error('[Auth] Error fetching profile:', error);
-        });
-
-        // Initialize sync immediately - don't wait for profile
-        console.log('[Auth] Initializing sync...');
-        initializeSync().catch((error: Error) => {
-          console.error('[Auth] Error initializing sync:', error);
-        });
-      } else {
-        setProfile(null);
       }
-
-      setLoading(false);
-    });
-
-    return () => {
-      clearTimeout(initTimeout);
-      subscription.unsubscribe();
     };
+
+    initAuth();
   }, []);
 
   const value = {
-    session,
     user,
     profile,
     loading,
-    signOut: handleSignOut,
+    resetApp: handleResetApp,
     refreshProfile,
   };
 
@@ -171,3 +119,6 @@ export function useAuth() {
   }
   return context;
 }
+
+// Re-export Profile type for backward compatibility with components
+export type { Profile };
