@@ -4,19 +4,12 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { LoadingAnimation } from '@/components/LoadingAnimation';
 import {
-  getTripStatsForToday,
-  getBusinessDeductibleValueForToday,
-  getAllTrips,
-  Trip,
-} from '@/services/tripService';
-import {
   getLocalTrips,
   getLocalTripStatsForToday,
   getLocalBusinessDeductibleForToday,
   LocalTrip,
 } from '@/services/localDatabase';
 import { getRateForYear } from '@/services/mileageRateService';
-// Removed sync service - app is now 100% offline
 import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';

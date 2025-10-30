@@ -42,7 +42,10 @@ let locationState: LocationState = {
 let lastLocationForSpeed: { latitude: number; longitude: number; timestamp: number } | null = null;
 
 // Rolling buffer of recent locations (for looking back when trip starts)
-let locationBuffer: BufferedLocation[] = [];
+// Using circular buffer for O(1) operations instead of O(n) shift()
+let locationBuffer: BufferedLocation[] = new Array(LOCATION_BUFFER_SIZE);
+let bufferIndex = 0;
+let bufferCount = 0; // Track how many items are actually in the buffer
 
 // Define the auto-tracking monitoring task
 TaskManager.defineTask(AUTO_TRACKING_TASK, async ({ data, error }) => {
@@ -107,18 +110,15 @@ TaskManager.defineTask(AUTO_TRACKING_TASK, async ({ data, error }) => {
 
       const now = Date.now();
 
-      // Add location to rolling buffer (for lookback when trip starts)
-      locationBuffer.push({
+      // Add location to rolling buffer using circular buffer (O(1) operation)
+      locationBuffer[bufferIndex] = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
         timestamp: now,
         speed: speed,
-      });
-
-      // Keep buffer size limited
-      if (locationBuffer.length > LOCATION_BUFFER_SIZE) {
-        locationBuffer.shift(); // Remove oldest location
-      }
+      };
+      bufferIndex = (bufferIndex + 1) % LOCATION_BUFFER_SIZE;
+      bufferCount = Math.min(bufferCount + 1, LOCATION_BUFFER_SIZE);
 
       // Update last location for next speed calculation
       lastLocationForSpeed = {
@@ -127,7 +127,7 @@ TaskManager.defineTask(AUTO_TRACKING_TASK, async ({ data, error }) => {
         timestamp: now,
       };
 
-      console.log(`[AutoTracking] Location update: speed=${speed.toFixed(1)} mph, tracking=${isTracking}, buffer=${locationBuffer.length} locations`);
+      console.log(`[AutoTracking] Location update: speed=${speed.toFixed(1)} mph, tracking=${isTracking}, buffer=${bufferCount} locations`);
 
       // Update location state
       locationState.lastSpeed = speed;
@@ -189,7 +189,7 @@ TaskManager.defineTask(AUTO_TRACKING_TASK, async ({ data, error }) => {
  * This helps capture the beginning of a trip that wasn't immediately detected
  */
 function findTripStartLocation(currentLocation: Location.LocationObject): BufferedLocation {
-  if (locationBuffer.length < 2) {
+  if (bufferCount < 2) {
     // Not enough history, use current location
     return {
       latitude: currentLocation.coords.latitude,
@@ -199,26 +199,33 @@ function findTripStartLocation(currentLocation: Location.LocationObject): Buffer
     };
   }
 
-  // Start from the oldest buffered location and find where significant movement began
-  // We look for the first location where the vehicle started moving from a stationary position
-  let tripStartIndex = 0;
-  let firstStationaryLocation = locationBuffer[0];
+  // Convert circular buffer to linear array for easier processing
+  // Oldest item is at bufferIndex (if buffer is full) or at 0 (if not full)
+  const orderedBuffer: BufferedLocation[] = [];
+  const startIdx = bufferCount < LOCATION_BUFFER_SIZE ? 0 : bufferIndex;
 
-  for (let i = 1; i < locationBuffer.length; i++) {
-    const prev = locationBuffer[i - 1];
-    const curr = locationBuffer[i];
+  for (let i = 0; i < bufferCount; i++) {
+    const idx = (startIdx + i) % LOCATION_BUFFER_SIZE;
+    orderedBuffer.push(locationBuffer[idx]);
+  }
+
+  // Start from the oldest buffered location and find where significant movement began
+  let tripStartIndex = 0;
+
+  for (let i = 1; i < orderedBuffer.length; i++) {
+    const prev = orderedBuffer[i - 1];
+    const curr = orderedBuffer[i];
     const distance = calculateDistance(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
 
     // If we find significant movement (more than threshold), this is likely where the trip started
     if (distance >= LOOKBACK_MOVEMENT_THRESHOLD) {
       tripStartIndex = i - 1; // Use the location just before movement began
-      firstStationaryLocation = prev;
       console.log(`[AutoTracking] 📍 Found trip start ${i - 1} locations back (${distance.toFixed(3)} mi movement detected)`);
       break;
     }
   }
 
-  const startLocation = locationBuffer[tripStartIndex];
+  const startLocation = orderedBuffer[tripStartIndex];
   const distanceRecovered = calculateDistance(
     startLocation.latitude,
     startLocation.longitude,
@@ -255,7 +262,8 @@ async function autoStartTrip(location: Location.LocationObject) {
     if (started) {
       console.log(`[AutoTracking] ✅ Trip started successfully from: ${address}`);
       // Clear buffer now that we've used it to start the trip
-      locationBuffer = [];
+      bufferIndex = 0;
+      bufferCount = 0;
       console.log('[AutoTracking] Location buffer cleared for new trip');
       // Could send a notification here
     } else {
@@ -417,7 +425,9 @@ export async function stopAutoTracking(): Promise<void> {
       stoppedSince: null,
       drivingDetected: false,
     };
-    locationBuffer = []; // Clear location history
+    // Clear location history
+    bufferIndex = 0;
+    bufferCount = 0;
     lastLocationForSpeed = null;
   } catch (error) {
     console.error('Error stopping auto-tracking:', error);

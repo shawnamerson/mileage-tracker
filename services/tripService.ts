@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Trip } from './tripTypes';
 import {
   saveLocalTrip,
@@ -17,17 +16,17 @@ import {
 } from './localDatabase';
 import { getRateForYear } from './mileageRateService';
 import { backupToICloud, isICloudBackupEnabled } from './iCloudBackup';
+import { getCurrentUserId as getAuthUserId } from './authService';
 
 // Re-export Trip type for backward compatibility
 export type { Trip };
 
-const USER_ID_KEY = 'user_id';
-
 /**
- * Get current user ID from local storage
+ * Wrapper for getCurrentUserId that throws if no user is logged in
+ * Maintains backward compatibility with old tripService behavior
  */
 async function getCurrentUserId(): Promise<string> {
-  const userId = await AsyncStorage.getItem(USER_ID_KEY);
+  const userId = await getAuthUserId();
   if (!userId) {
     throw new Error('No user logged in');
   }

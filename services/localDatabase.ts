@@ -278,9 +278,60 @@ export async function updateLocalTrip(
 }
 
 /**
- * Get trip statistics for today
+ * Helper function to aggregate statistics by purpose
+ * Consolidates duplicate logic from all stats functions
  */
-export async function getLocalTripStatsForToday(userId: string): Promise<{
+function aggregateStatsByPurpose(result: Array<{
+  purpose: string;
+  count: number;
+  total_distance: number;
+}>): {
+  totalTrips: number;
+  totalDistance: number;
+  businessTrips: number;
+  personalTrips: number;
+  businessDistance: number;
+  personalDistance: number;
+} {
+  let totalTrips = 0;
+  let totalDistance = 0;
+  let businessTrips = 0;
+  let personalTrips = 0;
+  let businessDistance = 0;
+  let personalDistance = 0;
+
+  result.forEach(row => {
+    totalTrips += row.count;
+    totalDistance += row.total_distance;
+
+    if (row.purpose === 'business') {
+      businessTrips = row.count;
+      businessDistance = row.total_distance;
+    } else if (row.purpose === 'personal') {
+      personalTrips = row.count;
+      personalDistance = row.total_distance;
+    }
+  });
+
+  return {
+    totalTrips,
+    totalDistance,
+    businessTrips,
+    personalTrips,
+    businessDistance,
+    personalDistance,
+  };
+}
+
+/**
+ * Generic function to get trip statistics for any date range
+ * Used by today/month/year specific functions
+ */
+async function getLocalTripStatsByDateRange(
+  userId: string,
+  startTime: number,
+  endTime: number
+): Promise<{
   totalTrips: number;
   totalDistance: number;
   businessTrips: number;
@@ -293,14 +344,6 @@ export async function getLocalTripStatsForToday(userId: string): Promise<{
   }
 
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const startOfDay = today.getTime();
-
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const endOfDay = tomorrow.getTime();
-
     const result = await db!.getAllAsync<{
       purpose: string;
       count: number;
@@ -313,39 +356,12 @@ export async function getLocalTripStatsForToday(userId: string): Promise<{
       FROM trips
       WHERE user_id = ? AND start_time >= ? AND start_time < ?
       GROUP BY purpose`,
-      [userId, startOfDay, endOfDay]
+      [userId, startTime, endTime]
     );
 
-    let totalTrips = 0;
-    let totalDistance = 0;
-    let businessTrips = 0;
-    let personalTrips = 0;
-    let businessDistance = 0;
-    let personalDistance = 0;
-
-    result.forEach(row => {
-      totalTrips += row.count;
-      totalDistance += row.total_distance;
-
-      if (row.purpose === 'business') {
-        businessTrips = row.count;
-        businessDistance = row.total_distance;
-      } else if (row.purpose === 'personal') {
-        personalTrips = row.count;
-        personalDistance = row.total_distance;
-      }
-    });
-
-    return {
-      totalTrips,
-      totalDistance,
-      businessTrips,
-      personalTrips,
-      businessDistance,
-      personalDistance,
-    };
+    return aggregateStatsByPurpose(result);
   } catch (error) {
-    console.error('[LocalDB] Error getting trip stats for today:', error);
+    console.error('[LocalDB] Error getting trip stats by date range:', error);
     return {
       totalTrips: 0,
       totalDistance: 0,
@@ -358,10 +374,13 @@ export async function getLocalTripStatsForToday(userId: string): Promise<{
 }
 
 /**
- * Get business deductible value for today
+ * Generic function to get business deductible for any date range
+ * Used by today/month/year specific functions
  */
-export async function getLocalBusinessDeductibleForToday(
+async function getLocalBusinessDeductibleByDateRange(
   userId: string,
+  startTime: number,
+  endTime: number,
   ratePerMile: number
 ): Promise<number> {
   if (!db) {
@@ -369,27 +388,59 @@ export async function getLocalBusinessDeductibleForToday(
   }
 
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const startOfDay = today.getTime();
-
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const endOfDay = tomorrow.getTime();
-
     const result = await db!.getFirstAsync<{ total_distance: number }>(
       `SELECT SUM(distance) as total_distance
        FROM trips
        WHERE user_id = ? AND purpose = 'business' AND start_time >= ? AND start_time < ?`,
-      [userId, startOfDay, endOfDay]
+      [userId, startTime, endTime]
     );
 
     const totalDistance = result?.total_distance || 0;
     return totalDistance * ratePerMile;
   } catch (error) {
-    console.error('[LocalDB] Error getting business deductible for today:', error);
+    console.error('[LocalDB] Error getting business deductible by date range:', error);
     return 0;
   }
+}
+
+/**
+ * Get trip statistics for today
+ */
+export async function getLocalTripStatsForToday(userId: string): Promise<{
+  totalTrips: number;
+  totalDistance: number;
+  businessTrips: number;
+  personalTrips: number;
+  businessDistance: number;
+  personalDistance: number;
+}> {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const startOfDay = today.getTime();
+
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const endOfDay = tomorrow.getTime();
+
+  return await getLocalTripStatsByDateRange(userId, startOfDay, endOfDay);
+}
+
+/**
+ * Get business deductible value for today
+ */
+export async function getLocalBusinessDeductibleForToday(
+  userId: string,
+  ratePerMile: number
+): Promise<number> {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const startOfDay = today.getTime();
+
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const endOfDay = tomorrow.getTime();
+
+  return await getLocalBusinessDeductibleByDateRange(userId, startOfDay, endOfDay, ratePerMile);
 }
 
 /**
@@ -491,69 +542,11 @@ export async function getLocalTripStatsForCurrentMonth(userId: string): Promise<
   businessDistance: number;
   personalDistance: number;
 }> {
-  if (!db) {
-    await initLocalDatabase();
-  }
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
 
-  try {
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
-
-    const result = await db!.getAllAsync<{
-      purpose: string;
-      count: number;
-      total_distance: number;
-    }>(
-      `SELECT
-        purpose,
-        COUNT(*) as count,
-        SUM(distance) as total_distance
-      FROM trips
-      WHERE user_id = ? AND start_time >= ? AND start_time < ?
-      GROUP BY purpose`,
-      [userId, startOfMonth, endOfMonth]
-    );
-
-    let totalTrips = 0;
-    let totalDistance = 0;
-    let businessTrips = 0;
-    let personalTrips = 0;
-    let businessDistance = 0;
-    let personalDistance = 0;
-
-    result.forEach(row => {
-      totalTrips += row.count;
-      totalDistance += row.total_distance;
-
-      if (row.purpose === 'business') {
-        businessTrips = row.count;
-        businessDistance = row.total_distance;
-      } else if (row.purpose === 'personal') {
-        personalTrips = row.count;
-        personalDistance = row.total_distance;
-      }
-    });
-
-    return {
-      totalTrips,
-      totalDistance,
-      businessTrips,
-      personalTrips,
-      businessDistance,
-      personalDistance,
-    };
-  } catch (error) {
-    console.error('[LocalDB] Error getting trip stats for current month:', error);
-    return {
-      totalTrips: 0,
-      totalDistance: 0,
-      businessTrips: 0,
-      personalTrips: 0,
-      businessDistance: 0,
-      personalDistance: 0,
-    };
-  }
+  return await getLocalTripStatsByDateRange(userId, startOfMonth, endOfMonth);
 }
 
 /**
@@ -567,68 +560,10 @@ export async function getLocalTripStatsForYear(userId: string, year: number): Pr
   businessDistance: number;
   personalDistance: number;
 }> {
-  if (!db) {
-    await initLocalDatabase();
-  }
+  const startOfYear = new Date(year, 0, 1).getTime();
+  const endOfYear = new Date(year + 1, 0, 1).getTime();
 
-  try {
-    const startOfYear = new Date(year, 0, 1).getTime();
-    const endOfYear = new Date(year + 1, 0, 1).getTime();
-
-    const result = await db!.getAllAsync<{
-      purpose: string;
-      count: number;
-      total_distance: number;
-    }>(
-      `SELECT
-        purpose,
-        COUNT(*) as count,
-        SUM(distance) as total_distance
-      FROM trips
-      WHERE user_id = ? AND start_time >= ? AND start_time < ?
-      GROUP BY purpose`,
-      [userId, startOfYear, endOfYear]
-    );
-
-    let totalTrips = 0;
-    let totalDistance = 0;
-    let businessTrips = 0;
-    let personalTrips = 0;
-    let businessDistance = 0;
-    let personalDistance = 0;
-
-    result.forEach(row => {
-      totalTrips += row.count;
-      totalDistance += row.total_distance;
-
-      if (row.purpose === 'business') {
-        businessTrips = row.count;
-        businessDistance = row.total_distance;
-      } else if (row.purpose === 'personal') {
-        personalTrips = row.count;
-        personalDistance = row.total_distance;
-      }
-    });
-
-    return {
-      totalTrips,
-      totalDistance,
-      businessTrips,
-      personalTrips,
-      businessDistance,
-      personalDistance,
-    };
-  } catch (error) {
-    console.error('[LocalDB] Error getting trip stats for year:', error);
-    return {
-      totalTrips: 0,
-      totalDistance: 0,
-      businessTrips: 0,
-      personalTrips: 0,
-      businessDistance: 0,
-      personalDistance: 0,
-    };
-  }
+  return await getLocalTripStatsByDateRange(userId, startOfYear, endOfYear);
 }
 
 /**
@@ -638,28 +573,11 @@ export async function getLocalBusinessDeductibleForCurrentMonth(
   userId: string,
   ratePerMile: number
 ): Promise<number> {
-  if (!db) {
-    await initLocalDatabase();
-  }
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
 
-  try {
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
-
-    const result = await db!.getFirstAsync<{ total_distance: number }>(
-      `SELECT SUM(distance) as total_distance
-       FROM trips
-       WHERE user_id = ? AND purpose = 'business' AND start_time >= ? AND start_time < ?`,
-      [userId, startOfMonth, endOfMonth]
-    );
-
-    const totalDistance = result?.total_distance || 0;
-    return totalDistance * ratePerMile;
-  } catch (error) {
-    console.error('[LocalDB] Error getting business deductible for current month:', error);
-    return 0;
-  }
+  return await getLocalBusinessDeductibleByDateRange(userId, startOfMonth, endOfMonth, ratePerMile);
 }
 
 /**
@@ -670,25 +588,8 @@ export async function getLocalBusinessDeductibleForYear(
   year: number,
   ratePerMile: number
 ): Promise<number> {
-  if (!db) {
-    await initLocalDatabase();
-  }
+  const startOfYear = new Date(year, 0, 1).getTime();
+  const endOfYear = new Date(year + 1, 0, 1).getTime();
 
-  try {
-    const startOfYear = new Date(year, 0, 1).getTime();
-    const endOfYear = new Date(year + 1, 0, 1).getTime();
-
-    const result = await db!.getFirstAsync<{ total_distance: number }>(
-      `SELECT SUM(distance) as total_distance
-       FROM trips
-       WHERE user_id = ? AND purpose = 'business' AND start_time >= ? AND start_time < ?`,
-      [userId, startOfYear, endOfYear]
-    );
-
-    const totalDistance = result?.total_distance || 0;
-    return totalDistance * ratePerMile;
-  } catch (error) {
-    console.error('[LocalDB] Error getting business deductible for year:', error);
-    return 0;
-  }
+  return await getLocalBusinessDeductibleByDateRange(userId, startOfYear, endOfYear, ratePerMile);
 }
