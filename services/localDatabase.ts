@@ -259,8 +259,7 @@ export async function updateLocalTrip(
       return; // Nothing to update
     }
 
-    // Mark as unsynced when updated
-    updateFields.push('synced = 0');
+    // Update the updated_at timestamp
     updateFields.push('updated_at = ?');
     updateValues.push(Date.now());
 
