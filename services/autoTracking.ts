@@ -9,11 +9,12 @@ import { sendTripCompletedNotification } from './notificationService';
 const AUTO_TRACKING_TASK = 'auto-tracking-monitor';
 const AUTO_TRACKING_ENABLED_KEY = 'auto_tracking_enabled';
 const AUTO_TRACKING_PURPOSE_KEY = 'auto_tracking_default_purpose';
-const DRIVING_SPEED_THRESHOLD = 5; // mph - minimum speed to consider driving
+const DRIVING_SPEED_THRESHOLD = 12; // mph - minimum speed to consider driving (increased to reduce false positives from GPS drift)
+const CONSECUTIVE_DRIVING_CHECKS = 2; // Number of consecutive speed readings above threshold before starting trip
 const STATIONARY_DURATION = 180000; // 3 minutes - how long stopped before ending trip
-const MIN_TRIP_DISTANCE = 0; // miles - save all trips regardless of distance
+const MIN_TRIP_DISTANCE = 0.1; // miles - minimum distance to save trip (0.1 mi = ~500 feet, filters out GPS drift)
 const LOCATION_BUFFER_SIZE = 20; // Keep last 20 locations (~1 minute of history at 3s intervals)
-const LOOKBACK_MOVEMENT_THRESHOLD = 0.01; // miles - minimum movement to consider as trip start
+const LOOKBACK_MOVEMENT_THRESHOLD = 0.05; // miles - minimum movement to consider as trip start (~250 feet, above GPS accuracy)
 const MIN_TIME_DELTA = 2000; // 2 seconds - minimum time between locations for valid speed calculation
 const MAX_SPEED_MPH = 200; // Cap speed at 200 mph (prevents absurd calculations from GPS errors)
 
@@ -22,6 +23,7 @@ interface LocationState {
   lastMovementTime: number;
   stoppedSince: number | null;
   drivingDetected: boolean;
+  consecutiveDrivingCount: number; // Track consecutive speed readings above threshold
 }
 
 interface BufferedLocation {
@@ -36,6 +38,7 @@ let locationState: LocationState = {
   lastMovementTime: Date.now(),
   stoppedSince: null,
   drivingDetected: false,
+  consecutiveDrivingCount: 0,
 };
 
 // Store last location for speed calculation
@@ -136,20 +139,31 @@ TaskManager.defineTask(AUTO_TRACKING_TASK, async ({ data, error }) => {
       const isDriving = speed >= DRIVING_SPEED_THRESHOLD;
 
       if (isDriving) {
+        // Increment consecutive driving counter
+        locationState.consecutiveDrivingCount++;
+
         // Only reset stop timer if we were previously stopped
         if (locationState.stoppedSince !== null) {
-          console.log(`[AutoTracking] ⚠️ Movement detected (${speed.toFixed(1)} mph) - resetting stop timer`);
+          console.log(`[AutoTracking] ⚠️ Movement detected (${speed.toFixed(1)} mph, ${locationState.consecutiveDrivingCount}/${CONSECUTIVE_DRIVING_CHECKS} consecutive) - resetting stop timer`);
         }
         locationState.lastMovementTime = now;
         locationState.stoppedSince = null;
 
-        // Start tracking if not already tracking
-        if (!isTracking && !locationState.drivingDetected) {
-          console.log(`[AutoTracking] Driving detected at ${speed.toFixed(1)} mph, starting trip...`);
+        // Start tracking only after consecutive speed readings above threshold (reduces false positives from GPS drift)
+        if (!isTracking && !locationState.drivingDetected && locationState.consecutiveDrivingCount >= CONSECUTIVE_DRIVING_CHECKS) {
+          console.log(`[AutoTracking] 🚗 Driving confirmed after ${CONSECUTIVE_DRIVING_CHECKS} consecutive readings at ${speed.toFixed(1)} mph, starting trip...`);
           locationState.drivingDetected = true;
           await autoStartTrip(location);
+        } else if (!isTracking && !locationState.drivingDetected) {
+          console.log(`[AutoTracking] Possible movement detected (${speed.toFixed(1)} mph, ${locationState.consecutiveDrivingCount}/${CONSECUTIVE_DRIVING_CHECKS} consecutive checks)`);
         }
       } else {
+        // Reset consecutive driving counter when speed drops below threshold
+        if (locationState.consecutiveDrivingCount > 0) {
+          console.log(`[AutoTracking] Speed dropped to ${speed.toFixed(1)} mph - resetting consecutive driving counter (was ${locationState.consecutiveDrivingCount}/${CONSECUTIVE_DRIVING_CHECKS})`);
+          locationState.consecutiveDrivingCount = 0;
+        }
+
         // Stopped or moving slowly
         if (isTracking) {
           // Mark when we first stopped
@@ -170,12 +184,14 @@ TaskManager.defineTask(AUTO_TRACKING_TASK, async ({ data, error }) => {
             await autoStopTrip();
             locationState.drivingDetected = false;
             locationState.stoppedSince = null;
+            locationState.consecutiveDrivingCount = 0;
           }
         } else if (locationState.drivingDetected && !isTracking) {
           // Reset driving detected flag if tracking somehow stopped without us knowing
           console.log('[AutoTracking] Resetting driving detected flag - tracking stopped unexpectedly');
           locationState.drivingDetected = false;
           locationState.stoppedSince = null;
+          locationState.consecutiveDrivingCount = 0;
         }
       }
     } catch (err) {
@@ -451,6 +467,7 @@ export async function stopAutoTracking(): Promise<void> {
       lastMovementTime: Date.now(),
       stoppedSince: null,
       drivingDetected: false,
+      consecutiveDrivingCount: 0,
     };
     // Clear location history
     bufferIndex = 0;
